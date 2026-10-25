@@ -6,10 +6,10 @@ const api = window.sb;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const PRESETS = [
+  { code: "volcengine", name: "火山引擎 TOS", short: "火", color: "#1664ff", endpoint: "https://tos-s3-cn-beijing.volces.com", region: "cn-beijing", style: "virtual", beta: true, note: "默认推荐。TOS 需要带 -s3- 的端点，仅支持虚拟主机样式；余额查询为 Beta，需要费用中心查询权限。" },
   { code: "aliyun", name: "阿里云 OSS", short: "阿", color: "#ff6a00", endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com", region: "cn-hangzhou", style: "path", note: "在 OSS 控制台创建 Bucket，并确认地域与 S3 兼容 Endpoint。" },
   { code: "tencent", name: "腾讯云 COS", short: "腾", color: "#1d7dfa", endpoint: "https://cos.ap-guangzhou.myqcloud.com", region: "ap-guangzhou", style: "virtual", note: "使用 COS 的 S3 兼容访问域名，按 Bucket 所在地域修改。" },
   { code: "huawei", name: "华为云 OBS", short: "华", color: "#cf0a2c", endpoint: "https://obs.cn-north-4.myhuaweicloud.com", region: "cn-north-4", style: "virtual", note: "以 OBS 控制台给出的 S3 兼容 Endpoint 为准。" },
-  { code: "volcengine", name: "火山引擎 TOS", short: "火", color: "#1664ff", endpoint: "https://tos-s3-cn-beijing.volces.com", region: "cn-beijing", style: "virtual", note: "TOS 需要带 -s3- 的端点，仅支持虚拟主机样式。" },
   { code: "tianyi", name: "天翼云 OOS", short: "天", color: "#db0e2e", endpoint: "", region: "cn-shanghai", style: "virtual", note: "从 OOS 控制台获取 S3 兼容 Endpoint 后填写。" },
   { code: "minio", name: "MinIO / 自建", short: "M", color: "#c72c48", endpoint: "http://127.0.0.1:9000", region: "us-east-1", style: "path", note: "自建 S3 兼容存储，适合家庭 NAS 与本地测试。" },
   { code: "custom", name: "其他 S3 兼容", short: "S3", color: "#6b7280", endpoint: "", region: "us-east-1", style: "path", note: "填写标准 S3 兼容 Endpoint、Region 与 Bucket。" },
@@ -22,7 +22,7 @@ const PAGE = {
   cloud: ["云端与续费", "各家对象存储"],
   transfer: ["迁出与迁回", "数据搬家与日志"],
   drive: ["虚拟磁盘", "WebDAV 网络盘"],
-  phone: ["手机访问", "同账号跨设备"],
+  phone: ["手机访问", "正在开发"],
   settings: ["设置与帮助", "本机与账号"],
 };
 const OPLABEL = { archive: "迁出到云", restore: "迁回本地", log_upload: "上传日志", verify: "校验" };
@@ -177,13 +177,15 @@ function closeModalEl(el) {
 }
 function confirmBox({ title, text, ok = "确认", danger = false }) {
   return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
     const m = openModal({
       title, body: `<p class="confirm-text">${e(text)}</p>`,
       foot: `<button class="btn btn-ghost" data-close>取消</button><button class="btn ${danger ? "btn-danger" : "btn-primary"}" data-ok>${e(ok)}</button>`,
-      onClose: () => resolve(false),
+      onClose: () => finish(false),
     });
     m.root.querySelector("[data-close]").onclick = () => m.close();
-    m.root.querySelector("[data-ok]").onclick = () => { m.close(); resolve(true); };
+    m.root.querySelector("[data-ok]").onclick = () => { finish(true); m.close(); };
   });
 }
 
@@ -265,17 +267,17 @@ function showAuth(mode = "login") {
   if (codeTimer) { clearInterval(codeTimer); codeTimer = null; }
   $("#app").classList.add("hidden");
   $("#auth").classList.remove("hidden");
-  const server = localStorage.getItem("sb.server") || (st.info && st.info.publicUrl) || "http://47.100.27.233";
+  const server = localStorage.getItem("sb.server") || (st.info && st.info.publicUrl) || "https://www.ai-xiehao.me";
   const login = mode === "login";
   $("#auth").innerHTML = `
   <section class="auth-visual">
     <div class="auth-brand"><img src="../../assets/tray.png" alt=""><div><b>存储熊</b><span>STORAGEBEAR</span></div></div>
     <div class="auth-hero">
       <h1>把散落在各家的云盘，<br>装进一块<em>熟悉的磁盘</em>。</h1>
-      <p>存储熊不售卖存储。你继续使用自己的火山、阿里、腾讯、华为等对象存储账号，我们把它整理成好用的虚拟磁盘、文件库与手机访问入口。</p>
+      <p>存储熊不售卖存储。你继续使用自己的火山、阿里、腾讯、华为等对象存储账号，我们把它整理成好用的虚拟磁盘、文件库与迁移工具。</p>
       <div class="auth-points">
         <div><i>01</i><span>密钥只加密保存在这台电脑，服务器只同步文件索引与设备信息。</span></div>
-        <div><i>02</i><span>同账号手机可访问电脑目录，电脑不能反向查看手机，隐私边界清清楚楚。</span></div>
+        <div><i>02</i><span>手机只读访问正在开发中；上线前不会开放任何手机写入电脑的能力。</span></div>
         <div><i>03</i><span>续费不足时一键迁回本地；迁出时同步上传日志，按日志原路恢复。</span></div>
       </div>
     </div>
@@ -287,7 +289,7 @@ function showAuth(mode = "login") {
   <section class="auth-panel"><div class="auth-card">
     <div class="auth-seg"><button class="${login ? "on" : ""}" data-act="auth-mode" data-mode="login">登录</button><button class="${login ? "" : "on"}" data-act="auth-mode" data-mode="register">注册</button></div>
     <h2>${login ? "欢迎回来" : "创建你的存储熊账号"}</h2>
-    <p class="sub">${login ? "同一账号登录手机网页，即可访问这台电脑的文件索引。" : "一个账号管理多台电脑。请使用能长期使用的邮箱。"}</p>
+    <p class="sub">${login ? "登录这台电脑的本地代理，同步索引与设备信息。" : "一个账号管理多台电脑。手机访问正在开发中。请使用能长期使用的邮箱。"}</p>
     <form data-form="auth" data-mode="${login ? "login" : "register"}">
       <div class="field"><label>服务器地址 <small>自建服务器可修改</small></label><input class="input" name="server" value="${e(server)}" placeholder="http://你的服务器" required></div>
       ${login ? "" : `<div class="field"><label>昵称</label><input class="input" name="name" maxlength="40" placeholder="例如：小王的电脑"></div>`}
@@ -522,7 +524,7 @@ async function viewDash() {
       </section>
       <section class="section">
         <div class="card card-pad" style="background:linear-gradient(140deg,#fffdf7,#fff)">
-          <div class="row" style="align-items:flex-start"><div class="stat-ic amber" style="width:34px;height:34px;border-radius:10px">${IC.shield}</div><div><b style="font-size:12.5px">账号与设备边界</b><p class="muted small" style="line-height:1.7;margin:4px 0 0">手机可访问这台电脑的索引与文件；电脑端永远不能访问手机目录。设备列表与在线状态可在「手机访问」查看。</p><button class="btn btn-sm btn-ghost mt8" data-act="nav" data-view="phone">查看手机入口</button></div></div>
+          <div class="row" style="align-items:flex-start"><div class="stat-ic amber" style="width:34px;height:34px;border-radius:10px">${IC.shield}</div><div><b style="font-size:12.5px">账号与设备边界</b><p class="muted small" style="line-height:1.7;margin:4px 0 0">手机只读访问正在开发中。上线后会保持单向边界：手机只能读这台电脑，电脑永远不能访问手机目录。</p><button class="btn btn-sm btn-ghost mt8" data-act="nav" data-view="phone">查看开发进度</button></div></div>
         </div>
       </section>
     </div>
@@ -641,7 +643,7 @@ function hostOf(u) {
   return String(u || "").replace(/^https?:\/\//i, "").replace(/\/+$/, "");
 }
 function siteUrl(path) {
-  const base = ((st.info && st.info.publicUrl) || "http://47.100.27.233").replace(/\/+$/, "");
+  const base = ((st.cfg && st.cfg.server) || (st.info && st.info.publicUrl) || "https://www.ai-xiehao.me").replace(/\/+$/, "");
   return base + path;
 }
 
@@ -713,11 +715,12 @@ function provCard(p) {
   const quota = Number(p.quota_bytes || 0);
   const pct = quota ? Math.min(100, Math.round(used / quota * 100)) : 0;
   const ready = !!(p.has_key && p.endpoint && p.bucket);
+  const beta = p.code === "volcengine";
   return `<div class="card provider-card">
     <div class="provider-top">
       <div class="provider-logo" style="background:${pcolor(p)}">${e(pshort(p))}</div>
       <div style="flex:1;min-width:0">
-        <div class="provider-name">${e(p.label)} ${p.enabled === 0 || p.enabled === false ? '<span class="tag">已停用</span>' : ""} ${ready ? "" : '<span class="tag amber">配置未完成</span>'}</div>
+        <div class="provider-name">${e(p.label)} ${beta ? '<span class="tag indigo">Beta</span>' : ""} ${p.enabled === 0 || p.enabled === false ? '<span class="tag">已停用</span>' : ""} ${ready ? "" : '<span class="tag amber">配置未完成</span>'}</div>
         <div class="provider-sub">${e(p.bucket || "未填写 Bucket")} · ${e(hostOf(p.endpoint) || "未填写 Endpoint")}</div>
       </div>
       <button class="btn btn-sm btn-icon btn-ghost" title="编辑" data-act="provider-edit" data-id="${e(p.id)}">${IC.edit}</button>
@@ -733,6 +736,7 @@ function provCard(p) {
       <button class="btn btn-sm btn-ghost" data-act="provider-restore" data-id="${e(p.id)}" ${p.archived_files ? "" : "disabled"}>${IC.download} 迁回</button>
       <button class="btn btn-sm btn-ghost" data-act="provider-files" data-id="${e(p.id)}">云端文件</button>
       <button class="btn btn-sm btn-ghost" data-act="provider-test" data-id="${e(p.id)}">测试连接</button>
+      ${beta ? `<button class="btn btn-sm btn-ghost" data-act="provider-balance" data-id="${e(p.id)}">余额 Beta</button>` : ""}
       <button class="btn btn-sm btn-ghost" data-act="provider-renew" data-id="${e(p.id)}">续费</button>
       <div class="spacer"></div>
       <button class="btn btn-sm btn-icon btn-ghost" title="删除配置" data-act="provider-del" data-id="${e(p.id)}">${IC.trash}</button>
@@ -754,23 +758,25 @@ function stitchCard(s) {
 function providerModal(p) {
   p = p || {};
   const edit = !!p.id;
-  const code = p.code || "";
+  const code = p.code || "volcengine";
+  const base = edit ? {} : (PRESETS.find((x) => x.code === code) || {});
+  const style = p.style || base.style || "path";
   const note = (PRESETS.find((x) => x.code === code) || {}).note || "选择一家云存储后会自动填入官方 S3 兼容端点，也可手动修改。";
-  const presets = PRESETS.map((x) => `<button type="button" class="preset ${x.code === code ? "on" : ""}" data-preset="${x.code}"><i style="background:${x.color}"></i><span>${e(x.name)}</span></button>`).join("");
+  const presets = PRESETS.map((x) => `<button type="button" class="preset ${x.code === code ? "on" : ""}" data-preset="${x.code}"><i style="background:${x.color}"></i><span>${e(x.name)}${x.beta ? " · Beta" : ""}</span></button>`).join("");
   return openModal({
     title: edit ? "编辑云存储" : "添加云存储",
-    sub: "密钥只加密保存在这台电脑，不会上传服务器。",
+    sub: "默认推荐火山引擎 TOS。密钥只加密保存在这台电脑，不会上传服务器。",
     wide: true,
     body: `<form id="provForm" data-form="provider" data-id="${e(p.id || "")}">
       <input type="hidden" name="code" value="${e(code)}">
       <div class="preset-grid">${presets}</div>
       <div class="help-box" id="preset-note">${e(note)} <button type="button" data-act="provider-help">查看获取密钥步骤</button></div>
       <div class="form-grid">
-        <div class="field full"><label>显示名称</label><input class="input" name="label" maxlength="60" value="${e(p.label || "")}" placeholder="例如：我的阿里云盘" required></div>
-        <div class="field full"><label>S3 兼容 Endpoint <small>必须带 https:// 或 http://</small></label><input class="input" name="endpoint" value="${e(p.endpoint || "")}" placeholder="https://s3.oss-cn-hangzhou.aliyuncs.com" required></div>
-        <div class="field"><label>地域 Region</label><input class="input" name="region" maxlength="40" value="${e(p.region || "us-east-1")}" placeholder="cn-hangzhou"></div>
+        <div class="field full"><label>显示名称</label><input class="input" name="label" maxlength="60" value="${e(p.label || "")}" placeholder="例如：我的火山引擎 TOS" required></div>
+        <div class="field full"><label>S3 兼容 Endpoint <small>必须带 https:// 或 http://</small></label><input class="input" name="endpoint" value="${e(p.endpoint || base.endpoint || "")}" placeholder="https://tos-s3-cn-beijing.volces.com" required></div>
+        <div class="field"><label>地域 Region</label><input class="input" name="region" maxlength="40" value="${e(p.region || base.region || "us-east-1")}" placeholder="cn-beijing"></div>
         <div class="field"><label>Bucket 名称</label><input class="input" name="bucket" maxlength="120" value="${e(p.bucket || "")}" placeholder="my-bucket" required></div>
-        <div class="field"><label>访问样式</label><select class="input" name="style"><option value="path" ${p.style !== "virtual" ? "selected" : ""}>路径样式（Path）</option><option value="virtual" ${p.style === "virtual" ? "selected" : ""}>虚拟主机样式（Virtual）</option></select></div>
+        <div class="field"><label>访问样式</label><select class="input" name="style"><option value="path" ${style !== "virtual" ? "selected" : ""}>路径样式（Path）</option><option value="virtual" ${style === "virtual" ? "selected" : ""}>虚拟主机样式（Virtual）</option></select></div>
         <div class="field"><label>配额记录 <small>GB，可留空</small></label><input class="input" type="number" min="0" step="1" name="quota_gb" value="${p.quota_bytes ? Math.round(Number(p.quota_bytes) / 1073741824) : ""}" placeholder="例如 100"></div>
         <div class="field"><label>到期日期 <small>用于续费提醒</small></label><input class="input" type="date" name="expires_at" value="${dateVal(p.expires_at)}"></div>
         <div class="field"><label>续费网址 <small>可留空</small></label><input class="input" name="renew_url" value="${e(p.renew_url || "")}" placeholder="https://控制台续费页面"></div>
@@ -779,6 +785,7 @@ function providerModal(p) {
         <div class="field full"><label class="opt-line"><input type="checkbox" name="enabled" ${p.enabled === 0 || p.enabled === false ? "" : "checked"}> 启用这个云存储</label></div>
       </div>
       <div class="form-note"><b>安全提示：</b>建议单独创建只有目标 Bucket 读写权限的子账号密钥，不要使用主账号密钥。填错不会损坏云端文件，可随时修改。</div>
+      ${code === "volcengine" ? `<div class="form-note mt12"><b>火山引擎 Beta：</b>TOS 迁出与迁回使用 S3 兼容接口；保存后可在卡片上查询账户余额。余额查询需要在火山引擎「访问控制 IAM」中给子账号授予费用中心 QueryBalanceAcct 权限，遇到 403 时会提示权限不足。连接手机功能正在开发中。</div>` : ""}
       <div class="test-state mt8 tiny" id="provTest"></div>
     </form>`,
     foot: `<button class="btn btn-ghost" type="button" data-act="provider-form-test">测试连接</button><button class="btn btn-ghost" type="button" data-act="close-modal">取消</button><button class="btn btn-primary" type="submit" form="provForm">${edit ? "保存修改" : "保存云存储"}</button>`,
@@ -813,7 +820,7 @@ function providerData() {
 }
 
 function providerHelp() {
-  const rows = PRESETS.filter((p) => p.code !== "custom").map((p) => `<div class="pick-item" style="align-items:flex-start"><i style="width:8px;height:8px;border-radius:50%;background:${p.color};margin-top:5px;flex:none"></i><div><b>${e(p.name)}</b><div class="tiny faint" style="line-height:1.7;margin-top:2px">控制台 → 对象存储 → 创建 Bucket；在访问密钥 / AccessKey 页面创建子账号密钥。端点：<span class="inline-code">${e(p.endpoint || "以控制台为准")}</span>，区域：<span class="inline-code">${e(p.region)}</span>，${p.style === "virtual" ? "通常使用虚拟主机样式" : "通常使用路径样式"}。</div></div></div>`).join("");
+  const rows = PRESETS.filter((p) => p.code !== "custom").map((p) => `<div class="pick-item" style="align-items:flex-start"><i style="width:8px;height:8px;border-radius:50%;background:${p.color};margin-top:5px;flex:none"></i><div><b>${e(p.name)}${p.beta ? ' <span class="tag indigo">Beta</span>' : ""}</b><div class="tiny faint" style="line-height:1.7;margin-top:2px">控制台 → 对象存储 → 创建 Bucket；在访问密钥 / AccessKey 页面创建子账号密钥。端点：<span class="inline-code">${e(p.endpoint || "以控制台为准")}</span>，区域：<span class="inline-code">${e(p.region)}</span>，${p.style === "virtual" ? "通常使用虚拟主机样式" : "通常使用路径样式"}。${p.beta ? "余额查询还需 IAM 费用中心 QueryBalanceAcct 权限；连接手机正在开发中。" : ""}</div></div></div>`).join("");
   openModal({
     title: "如何获取对象存储密钥",
     sub: "看不懂也没关系，按下面顺序操作。存储熊只需要 Bucket、Endpoint、Region、AccessKey 与 SecretKey。",
@@ -826,6 +833,28 @@ function providerHelp() {
     <div class="pick-list">${rows}</div>
     <div class="form-note mt12"><b>常见问题：</b>测试失败通常是 Bucket 与 Endpoint 地域不一致、密钥被空格截断、子账号没有该 Bucket 权限，或端点需要虚拟主机样式。云端已存在的同名对象不会被覆盖清理，但请勿在存储熊目录下手动改动文件。</div>`,
     foot: `<button class="btn btn-ghost" data-act="open-manual">使用手册</button><button class="btn btn-primary" data-act="close-modal">知道了</button>`,
+  });
+}
+
+function balanceModal(p, b) {
+  const row = (k, label) => `<dt>${label}</dt><dd>${e(b[k] === undefined || b[k] === "" ? "—" : b[k])}</dd>`;
+  openModal({
+    title: "火山引擎账户余额",
+    sub: `${p.label || "火山引擎"} · Beta 功能，数据来自费用中心 OpenAPI。`,
+    body: `<dl class="kv">${row("AvailableBalance", "可用余额")}${row("CashBalance", "现金余额")}${row("CreditLimit", "信控额度")}${row("FreezeAmount", "冻结金额")}${row("ArrearsBalance", "欠费金额")}${row("AccountID", "账号 ID")}</dl>
+      <div class="form-note mt12"><b>Beta 提示：</b>余额只能查询，充值和管理仍需在火山引擎费用中心完成。若提示 403，请在「访问控制 IAM」中为子账号添加费用中心 QueryBalanceAcct 权限，或改用主账号密钥。连接手机功能正在开发中。</div>`,
+    foot: `<button class="btn btn-ghost" data-act="provider-balance-recharge">去费用中心</button><button class="btn btn-primary" data-act="close-modal">知道了</button>`,
+  });
+}
+
+function balanceError(p, err) {
+  const msg = errMsg(err);
+  const denied = /权限不足|403|AccessDenied|Forbidden/i.test(msg);
+  openModal({
+    title: "余额查询失败",
+    sub: p.label || "火山引擎",
+    body: `<p class="confirm-text">${e(msg)}</p>${denied ? `<div class="form-note mt12"><b>如何授权：</b>登录火山引擎控制台 → 访问控制 IAM → 用户 → 选择这个 AccessKey 所属的子账号 → 添加权限 → 授予费用中心查询余额（QueryBalanceAcct）权限。保存后立即生效，无需重新填写密钥。</div>` : `<div class="form-note mt12">请检查 AccessKey / SecretKey 是否完整、账号是否已开通费用中心，以及本机网络能否访问 billing.volcengineapi.com。</div>`}`,
+    foot: `<button class="btn btn-primary" data-act="close-modal">知道了</button>`,
   });
 }
 
@@ -1120,7 +1149,7 @@ async function viewDrive() {
         <div class="card card-pad">
           <div class="card-title-row"><div><h3>${win ? "Windows 挂载步骤" : "macOS / Linux 连接步骤"}</h3><p>${win ? "首次使用可能需要启用 WebClient 服务。" : "使用系统内置的 WebDAV 客户端即可。"}</p></div><span class="tag">${win ? "Windows" : (st.info && st.info.platform === "darwin" ? "macOS" : "Linux")}</span></div>
           ${steps}
-          ${win ? `<div class="form-note mt12"><b>挂载失败？</b>请确认 Windows「服务」中的 WebClient 已启动，或重新运行安装程序的修复组件。也可以通过「此电脑 → 映射网络驱动器」手动填写上方地址与凭据。</div>` : `<div class="form-note mt12"><b>提示：</b>本机地址不要在手机上使用；手机访问请打开「手机访问」页。系统文件管理器对 WebDAV 的兼容性不同，若无法认证，可先启动服务再重试。</div>`}
+          ${win ? `<div class="form-note mt12"><b>挂载失败？</b>存储熊会自动检查 WebClient 并尝试两种挂载方式；仍失败时请重新运行安装程序修复 WebDAV 组件，或换一个盘符。连接信息只在本机有效。</div>` : `<div class="form-note mt12"><b>提示：</b>本机地址仅在这台电脑上有效。系统文件管理器对 WebDAV 的兼容性不同，若无法认证，可先启动服务再重试。</div>`}
         </div>
       </div>
     </div>
@@ -1129,48 +1158,30 @@ async function viewDrive() {
 
 /* ---------------- phone ---------------- */
 async function viewPhone() {
-  let ds = st.devices;
-  try { ds = (await api.devices()).devices || ds; } catch (_) {}
-  const url = siteUrl("/app");
-  const insecure = /^http:/i.test(url);
-  const pc = (st.status && st.status.device) || {};
-  const roots = ((st.cfg && st.cfg.roots) || []).length;
   return `<div class="view-inner">
     ${banner()}
-    <div class="sec-head"><div><h3>手机访问</h3><p>同一账号登录手机网页，即可浏览这台电脑的文件索引与云端副本。</p></div><button class="btn btn-ghost" data-act="open-manual">使用手册</button></div>
-    ${insecure ? `<div class="alert alert-warn mb16">${IC.warn}<div><b>当前公网入口是 HTTP。</b>登录密码与访问令牌将以明文经过网络。正式使用前请为服务器配置 HTTPS，或先只在可信网络内访问。</div></div>` : ""}
-    <div class="split">
-      <div>
-        <div class="card card-pad mb16">
-          <div class="card-title-row"><div><h3>打开手机访问页</h3><p>手机浏览器扫码或输入地址，无需安装 App。</p></div><span class="tag green">同账号</span></div>
-          <div class="phone-link-box"><span>${e(url)}</span><button class="btn btn-sm btn-primary" data-act="phone-copy">${IC.copy} 复制</button></div>
-          <div class="row mt12"><button class="btn btn-ghost" data-act="phone-open">${IC.open} 在浏览器打开</button><button class="btn btn-ghost" data-act="phone-guide">手机端怎么用</button></div>
-          <div class="form-note mt12"><b>如何登录：</b>手机打开上方页面，输入与电脑完全相同的邮箱和密码。手机会自动进入电脑文件区，不会看到其他手机目录。</div>
-        </div>
-        <div class="card card-pad">
-          <div class="card-title-row"><div><h3>共享范围</h3><p>这台电脑对手机公开的只是已索引内容与云端副本。</p></div><span class="tag">${roots} 个常用目录</span></div>
-          <dl class="kv">
-            <dt>电脑名称</dt><dd>${e(pc.name || (st.cfg && st.cfg.device_name) || "本机")}</dd>
-            <dt>在线状态</dt><dd><span class="dot-online"></span>${(st.status && st.status.logged_in) ? "已连接服务器" : "未登录"}</dd>
-            <dt>共享内容</dt><dd>文件索引、云端副本、按请求生成的限时链接</dd>
-            <dt>不含内容</dt><dd>手机本地目录、未扫描文件、云存储密钥</dd>
-          </dl>
-          <div class="form-note mt12"><b>取回机制：</b>手机请求一个仅云端的文件时，服务器会通知这台电脑上传或生成限时链接。电脑离线时，手机无法取得新链接。</div>
+    <div class="sec-head"><div><h3>手机访问</h3><p>连接手机的能力正在开发中，当前版本暂不开放。</p></div><span class="tag amber">开发中</span></div>
+    <div class="card card-pad mb16">
+      <div class="empty" style="padding:26px 8px">
+        <div class="e-ic">${IC.phone}</div>
+        <b>连接手机正在开发</b>
+        <p style="max-width:560px;margin:6px auto 16px">手机只读浏览电脑目录的功能还没有上线。当前版本请使用虚拟磁盘或文件库访问文件；上线后会继续保持「手机只能读电脑，电脑不能读手机」的单向边界。</p>
+        <div class="row" style="justify-content:center"><button class="btn btn-primary" data-act="nav" data-view="drive">${IC.drive} 使用虚拟磁盘</button><button class="btn btn-ghost" data-act="nav" data-view="files">${IC.folder} 打开文件库</button></div>
+      </div>
+    </div>
+    <div class="grid g2">
+      <div class="card card-pad">
+        <div class="card-title-row"><div><h3>计划中的能力</h3><p>开发完成后会在这里开放。</p></div><span class="tag indigo">Beta</span></div>
+        <div class="steps">
+          <div class="step"><div class="step-no">01</div><div><b>同账号只读浏览</b><p>手机登录后查看这台电脑已授权的目录与云端副本。</p></div></div>
+          <div class="step"><div class="step-no">02</div><div><b>单向隐私边界</b><p>电脑端不会出现手机目录，也无法访问其他电脑的索引。</p></div></div>
+          <div class="step"><div class="step-no">03</div><div><b>按需取回文件</b><p>电脑在线时，为仅云端的文件生成限时只读链接。</p></div></div>
         </div>
       </div>
-      <div>
-        <div class="card card-pad mb16">
-          <div class="card-title-row"><div><h3>我的电脑</h3><p>只有电脑端可以被手机访问。</p></div><span class="tag indigo">${ds.length} 台</span></div>
-          ${ds.length ? ds.map((x) => `<div class="device-item"><div class="device-ic">${IC.pc}</div><div style="flex:1;min-width:0"><b>${e(x.name || "电脑")} ${x.online ? '<span class="tag green">在线</span>' : '<span class="tag">离线</span>'}</b><p>${e(x.os || "未知系统")} · ${x.online ? "刚刚在线" : ago(x.last_seen)}</p></div><span class="tag">${(x.roots || []).length} 个目录</span></div>`).join("") : `<div class="empty" style="padding:24px 8px"><b>还没有可访问的电脑</b><p>请确认这台电脑已登录同一账号，并保持存储熊在托盘运行。</p></div>`}
-        </div>
-        <div class="card card-pad" style="background:linear-gradient(145deg,#f8fbff,#fff)">
-          <div class="card-title-row"><div><h3>隐私边界</h3><p>方向是单向的。</p></div>${IC.shield}</div>
-          <div class="steps">
-            <div class="step done"><div class="step-no">✓</div><div><b>手机 → 电脑：允许</b><p>手机浏览电脑已扫描目录，打开本地文件，或请求云端文件链接。</p></div></div>
-            <div class="step"><div class="step-no">×</div><div><b>电脑 → 手机：禁止</b><p>电脑端没有手机目录入口，服务器策略也拒绝电脑访问手机设备。</p></div></div>
-            <div class="step"><div class="step-no">×</div><div><b>电脑 → 其他电脑：禁止</b><p>每台电脑只能访问自己的索引，不共享其他电脑目录。</p></div></div>
-          </div>
-        </div>
+      <div class="card card-pad" style="background:linear-gradient(145deg,#fffdf8,#fff)">
+        <div class="card-title-row"><div><h3>现在可以做什么</h3><p>不依赖手机功能。</p></div>${IC.shield}</div>
+        <p class="small muted" style="line-height:1.85;margin:0">用 Windows 客户端把索引目录挂成只读网络盘，或直接在文件库中打开、创建限时链接、迁出与迁回。云密钥仍然只保存在本机，服务器不会收到。</p>
+        <div class="form-note mt12"><b>说明：</b>功能完成前，客户端会把这个入口保持为「开发中」，不再展示手机地址与登录说明。</div>
       </div>
     </div>
   </div>`;
@@ -1191,7 +1202,7 @@ async function viewSettings() {
     <div class="split">
       <div>
         <div class="card card-pad mb16">
-          <div class="card-title-row"><div><h3>账号</h3><p>同一账号用于电脑端与手机网页。</p></div><span class="tag green">已登录</span></div>
+          <div class="card-title-row"><div><h3>账号</h3><p>同一账号管理多台电脑。</p></div><span class="tag green">已登录</span></div>
           <dl class="kv">
             <dt>昵称</dt><dd>${e(u.name || "未填写")}</dd>
             <dt>邮箱</dt><dd>${e(u.email || "—")}</dd>
@@ -1201,9 +1212,9 @@ async function viewSettings() {
           <div class="row mt16"><button class="btn btn-ghost" data-act="settings-sync">${IC.refresh} 同步云端元数据</button><button class="btn btn-ghost" data-act="acct-logout">退出登录</button></div>
         </div>
         <div class="card card-pad mb16">
-          <div class="card-title-row"><div><h3>这台电脑</h3><p>设备名称会显示在手机访问页。</p></div><span class="tag">${e(info.platform || "")}</span></div>
+          <div class="card-title-row"><div><h3>这台电脑</h3><p>设备名称用于区分多台电脑。</p></div><span class="tag">${e(info.platform || "")}</span></div>
           <form data-form="settings-name" class="row" style="align-items:flex-end"><div class="field" style="flex:1;margin:0"><label>电脑名称</label><input class="input" name="device_name" maxlength="60" value="${e(cfg.device_name || (s.device && s.device.name) || "")}" required></div><button class="btn btn-sm" type="submit">保存</button></form>
-          <div class="setting-row mt16"><div class="setting-info"><b>开机自动启动</b><p>${info.dev ? "开发模式下不修改系统自启动项。" : "登录系统后在托盘静默启动，方便手机随时访问。"}</p></div><button class="switch ${auto ? "on" : ""}" data-act="settings-auto" aria-label="切换自动启动"></button></div>
+          <div class="setting-row mt16"><div class="setting-info"><b>开机自动启动</b><p>${info.dev ? "开发模式下不修改系统自启动项。" : "登录系统后在托盘静默启动，让文件库与虚拟磁盘保持在线。"}</p></div><button class="switch ${auto ? "on" : ""}" data-act="settings-auto" aria-label="切换自动启动"></button></div>
           <div class="setting-row"><div class="setting-info"><b>本机数据目录</b><p class="mono tiny">${e(info.dataDir || "")}</p></div><div class="row"><button class="btn btn-sm btn-ghost" data-act="open-data">打开</button><button class="btn btn-sm btn-ghost" data-act="open-logs">日志</button></div></div>
         </div>
         <div class="card card-pad">
@@ -1224,14 +1235,14 @@ async function viewSettings() {
           <div class="card-title-row"><div><h3>安全边界</h3><p>存储熊的设计前提。</p></div>${IC.shield}</div>
           <div class="steps">
             <div class="step done"><div class="step-no">✓</div><div><b>云密钥只留本机</b><p>AccessKey / SecretKey 不上传服务器；Windows 使用 DPAPI 加密。服务器只同步索引、设备和迁移日志。</p></div></div>
-            <div class="step done"><div class="step-no">✓</div><div><b>手机单向访问电脑</b><p>服务器拒绝电脑端访问手机目录，也拒绝电脑访问其他电脑。</p></div></div>
+            <div class="step"><div class="step-no">…</div><div><b>手机只读访问（开发中）</b><p>功能上线后会保持单向只读：手机可读电脑，电脑不能读取手机或其他电脑。</p></div></div>
             <div class="step done"><div class="step-no">✓</div><div><b>虚拟盘仅本机只读</b><p>WebDAV 服务绑定 127.0.0.1，并禁止写操作。</p></div></div>
           </div>
           <div class="form-note mt12"><b>保持更新：</b>请定期查看日志目录；如密钥可能泄露，请立即到云厂商控制台禁用该 AccessKey，并在存储熊中更新配置。</div>
         </div>
         <div class="card card-pad">
           <div class="panel-head"><div><h3>关于</h3><p>本地代理 ${e(info.version || s.version || "")} · 数据仅存于本机与你的云存储。</p></div><span class="tag indigo">存储熊</span></div>
-          <div class="row"><button class="btn btn-sm btn-ghost" data-act="settings-drive">${IC.drive} 虚拟磁盘</button><button class="btn btn-sm btn-ghost" data-act="phone-guide">${IC.phone} 手机访问</button></div>
+          <div class="row"><button class="btn btn-sm btn-ghost" data-act="settings-drive">${IC.drive} 虚拟磁盘</button><button class="btn btn-sm btn-ghost" data-act="phone-guide">${IC.phone} 手机访问（开发中）</button></div>
           <p class="tiny faint" style="line-height:1.7;margin:12px 0 0">使用手册与产品文案由 AI 辅助创作并经人工整理。对象存储兼容性以各云厂商公开文档与你实际创建的 Bucket 为准。</p>
         </div>
       </div>
@@ -1439,6 +1450,21 @@ async function doShare(path) {
   } catch (err) { toast(errMsg(err), "error"); }
 }
 
+function mountHelp(err) {
+  openModal({
+    title: "网络盘挂载没有成功",
+    sub: "存储熊已自动启动 WebDAV 客户端、清理旧映射，并尝试了 URL 与 UNC 两种连接方式。",
+    body: `<p class="confirm-text">${e(errMsg(err))}</p>
+      <ol class="mount-steps mt12">
+        <li>如果提示 WebClient 或系统错误 67，请重新运行 0.1.3 安装包修复组件，然后重启电脑再试。</li>
+        <li>确认「此电脑」中没有占用同一盘符的旧连接；安装包已自动启用 WebDAV 客户端与 HTTP 基本认证。</li>
+        <li>仍失败时，到「虚拟磁盘」页手动换一个盘符（如 Z），再点击挂载。无需在命令行执行 NET USE。</li>
+      </ol>
+      <div class="form-note mt12">挂载只在本机回环地址进行，不会把文件或密钥暴露到局域网。若公司电脑受组策略限制，可能需要联系管理员放行 WebDAV 客户端。</div>`,
+    foot: `<button class="btn btn-ghost" data-act="nav" data-view="drive">去换盘符</button><button class="btn btn-primary" data-act="drive-retry">重试挂载</button>`,
+  });
+}
+
 async function doDrive(action) {
   const names = { start: "WebDAV 服务已启动", stop: "WebDAV 服务已停止", mount: "挂载操作完成", unmount: "网络盘已卸载" };
   try {
@@ -1456,7 +1482,10 @@ async function doDrive(action) {
     await refreshAll();
     await render();
     toast(names[action] || "操作完成", "ok");
-  } catch (err) { toast(errMsg(err), "error"); }
+  } catch (err) {
+    if (action === "mount") { await refreshAll().catch(() => {}); mountHelp(err); }
+    else toast(errMsg(err), "error");
+  }
 }
 
 async function addRoots(paths) {
@@ -1478,15 +1507,10 @@ async function delRoot(path) {
 
 function showPhoneGuide() {
   openModal({
-    title: "手机端使用说明",
+    title: "手机访问正在开发",
     wide: true,
-    body: `<div class="steps">
-      <div class="step"><div class="step-no">01</div><div><b>打开手机访问页</b><p>用手机浏览器访问 <span class="inline-code">${e(siteUrl("/app"))}</span>，输入与电脑相同的账号密码。</p></div></div>
-      <div class="step"><div class="step-no">02</div><div><b>选择电脑并浏览</b><p>登录后只会出现「电脑」目录。手机可以进入目录、搜索文件、预览索引信息。</p></div></div>
-      <div class="step"><div class="step-no">03</div><div><b>打开或下载文件</b><p>本地文件由电脑生成限时链接；仅云端文件会先通知电脑上传或签名，再返回可用地址。</p></div></div>
-      <div class="step"><div class="step-no">04</div><div><b>电脑必须在线</b><p>手机不存储你的完整文件。电脑退出存储熊或断网后，新的取回请求会失败。</p></div></div>
-    </div>
-    <div class="form-note mt16"><b>边界：</b>电脑端永远不能查看手机目录；同一账号的其他电脑也不可见。手机页不会显示 AccessKey 和本地未索引文件。</div>`,
+    body: `<div class="empty" style="padding:18px 8px 8px"><div class="e-ic">${IC.phone}</div><b>连接手机暂未开放</b><p style="max-width:520px;margin:6px auto 0">手机只读浏览电脑目录的功能正在开发中。当前版本请使用虚拟磁盘或文件库访问文件；功能上线前不会开放手机登录入口。</p></div>
+    <div class="form-note mt16"><b>计划边界：</b>手机只能读取电脑授权内容，电脑端不会出现手机目录，也不会访问其他电脑的索引。云密钥始终只保存在本机。</div>`,
     foot: `<button class="btn btn-primary" data-act="close-modal">知道了</button>`,
   });
 }
@@ -1583,6 +1607,16 @@ document.addEventListener("click", async (ev) => {
           const r = await api.testProvider({ id });
           toast("连接正常，用时 " + Number(r.ms || 0) + " ms", "ok");
         } finally { buttonBusy(el, false); }
+      } else if (act === "provider-balance") {
+        const p = st.providers.find((x) => x.id === id) || {};
+        buttonBusy(el, true, "查询中");
+        try {
+          balanceModal(p, await api.providerBalance(id));
+        } catch (err) {
+          balanceError(p, err);
+        } finally { buttonBusy(el, false); }
+      } else if (act === "provider-balance-recharge") {
+        await api.openExternal("https://console.volcengine.com/finance/");
       } else if (act === "provider-del") {
         const p = st.providers.find((x) => x.id === id) || {};
         const n = Number(p.archived_files || 0);
@@ -1593,6 +1627,7 @@ document.addEventListener("click", async (ev) => {
         });
         if (!ok) return;
         await api.deleteProvider(id, n > 0);
+        st.providers = st.providers.filter((x) => x.id !== id);
         await refreshAll(); await render(); toast("云存储配置已删除", "ok");
       } else if (act === "provider-renew") {
         const p = st.providers.find((x) => x.id === id) || {};
@@ -1671,6 +1706,9 @@ document.addEventListener("click", async (ev) => {
         scanModal({ roots: [browseCur] });
       } else if (act === "drive-start" || act === "drive-stop" || act === "drive-mount" || act === "drive-unmount") {
         await doDrive(act.slice(6));
+      } else if (act === "drive-retry") {
+        closeModalEl(el);
+        await doDrive("mount");
       } else if (act === "drive-refresh") {
         await refreshAll(); await render();
       } else if (act === "drive-copy") {

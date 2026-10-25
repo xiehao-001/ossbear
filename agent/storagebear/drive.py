@@ -64,6 +64,26 @@ def _attr(v):
     return escape(str(v or ""), {'"': "&quot;"})
 
 
+def _neterr(out, err, code):
+    text = (err or out or "").strip()
+    low = text.lower()
+    hit = re.search(r"(?:system error|系统错误)\s*[:：]?\s*(\d+)", text, re.I)
+    hints = {
+        67: "Windows 的 WebClient 服务未运行，或网络名称无法解析。请重新运行存储熊安装程序修复 WebDAV 组件，再重试挂载。",
+        85: "盘符已被占用，请在「虚拟磁盘」页换一个盘符，或先卸载原来的网络盘。",
+        1219: "该盘符已被其他账号连接。请先断开原有连接，再回到存储熊挂载。",
+        1244: "当前登录账号无权映射网络驱动器。请用管理员账号安装并启动存储熊。",
+    }
+    if hit:
+        n = int(hit.group(1))
+        if n in hints:
+            return hints[n]
+        return "Windows 返回错误 %d：%s" % (n, text)
+    if "net use" in low:
+        return "Windows 拒绝了挂载参数，请重新选择盘符后再试。"
+    return text or "挂载失败（%s）" % code
+
+
 class Drive:
     def __init__(self, agent):
         self.agent = agent
@@ -129,13 +149,39 @@ class Drive:
     def url(self):
         return "http://127.0.0.1:%d%s/" % (self.port, DAV) if self.port else ""
 
+    def _letter(self, val=None):
+        raw = self._conf().get("letter") if val is None else val
+        letter = str(raw or (util.free_drive() if val is None else "") or "").strip().upper()
+        for ch in letter:
+            if "A" <= ch <= "Z":
+                return ch
+        return ""
+
+    def _webclient(self):
+        if os.name != "nt":
+            return False
+        try:
+            util.popen(["net", "start", "WebClient"], timeout=30)
+            _, out, err = util.popen(["sc", "query", "WebClient"], timeout=15)
+            return "RUNNING" in (out + err).upper()
+        except Exception:
+            return False
+
+    def _unmap(self, letter):
+        try:
+            util.popen(["net", "use", letter + ":", "/delete", "/y"], timeout=30)
+        except Exception:
+            pass
+
     def mounted(self):
-        c = self._conf()
-        if os.name != "nt" or not c["letter"]:
+        if os.name != "nt":
+            return False
+        letter = self._letter()
+        if not letter:
             return False
         try:
             import ctypes
-            return ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(c["letter"] + "\\")) == 4
+            return ctypes.windll.kernel32.GetDriveTypeW(ctypes.c_wchar_p(letter + ":\\")) == 4
         except Exception:
             return False
 
@@ -158,26 +204,36 @@ class Drive:
             return {"manual": True, "url": info["url"], "user": info["user"],
                     "pass": info["pass"],
                     "hint": "macOS 可在 Finder「连接服务器」输入该地址；Linux 可用 gio mount dav://…"}
-        letter = self._conf()["letter"] or util.free_drive()
-        if not letter:
-            raise RuntimeError("没有可用的盘符")
-        letter = letter.rstrip("\\")
-        code, out, err = util.popen(["net", "use", letter + ":", info["url"].rstrip("/"),
-                                     "/user:" + info["user"], info["pass"], "/persistent:no"], timeout=60)
-        if code != 0:
-            raise RuntimeError((err or out).strip() or "挂载失败，请确认 WebClient 服务已启用")
-        c = util.config()
-        c["drive_letter"] = letter
-        util.save_json(util.path("config.json"), c)
-        self.agent.cfg = c
-        return self.info()
+        letters = []
+        for l in (self._letter(), self._letter(util.free_drive())):
+            if l and l not in letters:
+                letters.append(l)
+        if not letters:
+            raise RuntimeError("没有可用的盘符，请在「虚拟磁盘」页指定一个未被占用的盘符")
+        dests = [info["url"], "\\\\127.0.0.1@%d\\%s" % (self.port, DAV.strip("/"))]
+        errs = []
+        self._webclient()
+        for letter in letters:
+            self._unmap(letter)
+            for dest in dests:
+                code, out, err = util.popen(
+                    ["net", "use", letter + ":", dest, info["pass"], "/user:" + info["user"], "/persistent:no"],
+                    timeout=60)
+                if code == 0:
+                    c = util.config()
+                    c["drive_letter"] = letter + ":"
+                    util.save_json(util.path("config.json"), c)
+                    self.agent.cfg = c
+                    return self.info()
+                errs.append(_neterr(out, err, code))
+        raise RuntimeError("\n\n".join(x for i, x in enumerate(errs) if x and x not in errs[:i]))
 
     def unmount(self):
-        c = self._conf()
-        if os.name != "nt" or not c["letter"]:
+        if os.name != "nt":
             return self.info()
-        letter = c["letter"].rstrip("\\")
-        util.popen(["net", "use", letter + ":", "/delete", "/y"], timeout=30)
+        letter = self._letter()
+        if letter:
+            self._unmap(letter)
         return self.info()
 
 

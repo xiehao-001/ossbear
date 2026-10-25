@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from . import VERSION, scan, util
 from .remote import ApiError
 from .s3 import S3, S3Error
+from .volc import VolcError
 
 MAXBODY = 2 * 1024 * 1024
 
@@ -176,7 +177,7 @@ def _handler(agent, token):
                 util.log("local api remote error: %s" % e)
                 code = e.code if 400 <= int(e.code or 0) < 500 else 400
                 self._send(code, {"ok": False, "error": e.msg, "data": e.data})
-            except (RuntimeError, S3Error) as e:
+            except (RuntimeError, S3Error, VolcError) as e:
                 self._send(400, {"ok": False, "error": str(getattr(e, "msg", e))})
             except Exception as e:
                 util.log("local api error: %s\n%s" % (e, traceback.format_exc()))
@@ -215,6 +216,9 @@ def _handler(agent, token):
                     return 200, {"provider": p}
             if method == "POST" and path == "/api/providers/test":
                 return 200, self._test(dict(data))
+            if len(parts) == 4 and parts[:2] == ["api", "providers"] and parts[3] == "balance" \
+                    and method == "GET":
+                return 200, a.balance(parts[2])
             if len(parts) == 3 and parts[:2] == ["api", "providers"]:
                 if method == "DELETE":
                     a.delp(parts[2], bool(int(qs.get("force") or 0)))

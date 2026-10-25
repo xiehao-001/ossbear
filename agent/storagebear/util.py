@@ -151,13 +151,22 @@ def openpath(p):
         subprocess.Popen(["xdg-open", p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _text(raw):
+    for enc in ("utf-8", "gbk", "mbcs"):
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            pass
+    return raw.decode("utf-8", "replace")
+
+
 def popen(args, wait=True, timeout=60):
     kw = {}
     if os.name == "nt":
         kw["creationflags"] = 0x08000000
     if wait:
         p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, **kw)
-        return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+        return p.returncode, _text(p.stdout), _text(p.stderr)
     return subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
 
 

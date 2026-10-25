@@ -35,6 +35,14 @@ def _xml(raw):
     return ET.fromstring(raw)
 
 
+def _denied(msg, code):
+    low = (code + " " + msg).lower()
+    if "signature" in low or "accesskey" in low or "credential" in low:
+        return "密钥或签名不匹配：请核对 AccessKey / SecretKey、Endpoint 与 Region。原始信息：%s" % msg
+    return ("权限不足（403）：当前密钥不能操作这个 Bucket。请确认子账号已获得该 Bucket 的"
+            "列出、读取与写入权限。原始信息：%s" % msg)
+
+
 class S3:
     def __init__(self, conf):
         ep = (conf.get("endpoint") or "").strip()
@@ -146,6 +154,8 @@ class S3:
                 msg = raw.decode("utf-8", "replace")[:300]
             if not msg:
                 msg = "对象存储请求失败 (%s %s)" % (e.code, method)
+            if e.code == 403:
+                msg = _denied(msg, code)
             raise S3Error(e.code, msg, code)
         except urllib.error.URLError as e:
             raise S3Error(0, "无法连接对象存储：%s" % (e.reason,))

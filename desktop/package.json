@@ -1,7 +1,7 @@
 {
   "name": "storagebear",
   "productName": "存储熊",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "把火山、阿里、腾讯、华为等对象存储变成一块好用的虚拟磁盘",
   "main": "src/main.js",
   "author": "StorageBear",

@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld("sb", {
   updateProvider: (a) => call("updateProvider", a),
   deleteProvider: (id, force) => call("deleteProvider", { id, force }),
   testProvider: (a) => call("testProvider", a),
+  providerBalance: (id) => call("providerBalance", { id }),
   stitches: () => call("listStitches"),
   saveStitch: (a) => call("saveStitch", a),
   deleteStitch: (id) => call("deleteStitch", { id }),

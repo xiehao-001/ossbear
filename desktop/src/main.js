@@ -4,7 +4,7 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 
-const PUBLIC = (process.env.SB_PUBLIC_URL || "http://47.100.27.233").replace(/\/+$/, "");
+const PUBLIC = (process.env.SB_PUBLIC_URL || "https://www.ai-xiehao.me").replace(/\/+$/, "");
 const DEV = !app.isPackaged;
 const DATA = path.join(app.getPath("appData"), "StorageBear");
 app.setName("StorageBear");
@@ -158,6 +158,7 @@ const calls = {
   updateProvider: (a) => ({ route: "/api/providers/" + encodeURIComponent(a.id), method: "POST", data: a }),
   deleteProvider: (a) => ({ route: "/api/providers/" + encodeURIComponent(a.id) + (a.force ? "?force=1" : ""), method: "DELETE" }),
   testProvider: (a) => ({ route: "/api/providers/test", method: "POST", data: a }),
+  providerBalance: (a) => ({ route: "/api/providers/" + encodeURIComponent(a.id) + "/balance" }),
   listStitches: () => ({ route: "/api/stitches" }),
   saveStitch: (a) => ({ route: "/api/stitches", method: "POST", data: a }),
   deleteStitch: (a) => ({ route: "/api/stitches/" + encodeURIComponent(a.id), method: "DELETE" }),
@@ -250,7 +251,7 @@ function makeTray() {
     { label: "挂载虚拟磁盘", click: () => driveAction("mount") },
     { label: "卸载虚拟磁盘", click: () => driveAction("unmount") },
     { type: "separator" },
-    { label: "打开手机访问页", click: () => shell.openExternal(PUBLIC + "/app") },
+    { label: "手机访问（开发中）", enabled: false },
     { label: "使用手册", click: () => shell.openExternal(PUBLIC + "/manual") },
     { type: "separator" },
     { label: "退出", click: () => { quitting = true; app.quit(); } },

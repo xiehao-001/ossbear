@@ -2,9 +2,10 @@
   DetailPrint "配置 WebDAV 虚拟磁盘支持..."
   nsExec::ExecToLog 'dism /online /enable-feature /featurename:FS-WebDAV-Redirector /all /norestart'
   nsExec::ExecToLog 'sc config WebClient start= auto'
-  nsExec::ExecToLog 'net start WebClient'
   WriteRegDWORD HKLM "SYSTEM\CurrentControlSet\Services\WebClient\Parameters" "BasicAuthLevel" 2
   WriteRegDWORD HKLM "SYSTEM\CurrentControlSet\Services\WebClient\Parameters" "FileSizeLimitInBytes" 4294967295
+  nsExec::ExecToLog 'net stop WebClient /y'
+  nsExec::ExecToLog 'net start WebClient'
 
   ReadRegDWORD $0 HKLM "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" "Installed"
   ${If} $0 != 1

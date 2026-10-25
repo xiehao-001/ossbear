@@ -296,6 +296,15 @@ class Agent:
             except Exception as e:
                 util.log("provider delete: %s" % e)
 
+    def balance(self, pid):
+        p = self.db.prov(pid, secret=True)
+        if not p:
+            raise RuntimeError("云存储不存在")
+        if p.get("code") != "volcengine":
+            raise RuntimeError("余额查询目前只支持火山引擎（Beta）")
+        from .volc import query_balance
+        return query_balance(p.get("access_key", ""), p.get("secret_key", ""))
+
     def savestitch(self, d):
         s = self.db.stitch(d)
         if self.api.token:

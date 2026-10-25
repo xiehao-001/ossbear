@@ -1,4 +1,7 @@
 PRESETS = [
+    {"code": "volcengine", "name": "火山引擎 TOS", "endpoint": "https://tos-s3-cn-beijing.volces.com",
+     "region": "cn-beijing", "style": "virtual", "color": "#1664ff", "beta": True,
+     "note": "默认推荐。TOS 需使用带 -s3- 的端点，只支持虚拟主机样式；余额查询为 Beta，需要费用中心权限。"},
     {"code": "aliyun", "name": "阿里云 OSS", "endpoint": "https://s3.oss-cn-hangzhou.aliyuncs.com",
      "region": "cn-hangzhou", "style": "path", "color": "#ff6a00",
      "note": "按 OSS 控制台的 S3 兼容 Endpoint 与地域填写。"},
@@ -8,9 +11,6 @@ PRESETS = [
     {"code": "huawei", "name": "华为云 OBS", "endpoint": "https://obs.cn-north-4.myhuaweicloud.com",
      "region": "cn-north-4", "style": "virtual", "color": "#cf0a2c",
      "note": "以 OBS 控制台的 S3 兼容 Endpoint 为准。"},
-    {"code": "volcengine", "name": "火山引擎 TOS", "endpoint": "https://tos-s3-cn-beijing.volces.com",
-     "region": "cn-beijing", "style": "virtual", "color": "#1664ff",
-     "note": "TOS 需使用带 -s3- 的端点，只支持虚拟主机样式。"},
     {"code": "tianyi", "name": "天翼云 OOS", "endpoint": "", "region": "cn-shanghai",
      "style": "virtual", "color": "#db0e2e", "note": "从 OOS 控制台获取 S3 兼容 Endpoint。"},
     {"code": "minio", "name": "MinIO / 自建", "endpoint": "http://127.0.0.1:9000",
