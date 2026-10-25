@@ -1,0 +1,2 @@
+# 桌面代理仅使用 Python 标准库；此文件仅供打包时安装 PyInstaller。
+pyinstaller>=6.0

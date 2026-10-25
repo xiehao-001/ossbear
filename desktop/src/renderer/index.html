@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>存储熊</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="boot" class="boot">
+    <div class="boot-mark"><img src="../../assets/tray.png" alt=""><span class="boot-ring"></span></div>
+    <p>正在唤醒存储熊…</p>
+  </div>
+
+  <div id="auth" class="auth hidden"></div>
+
+  <div id="app" class="app hidden">
+    <aside class="side">
+      <div class="brand">
+        <img src="../../assets/tray.png" alt="" class="brand-icon">
+        <div><strong>存储熊</strong><span>多云虚拟磁盘</span></div>
+      </div>
+      <nav class="nav" id="nav">
+        <button class="nav-item" data-act="nav" data-view="dashboard">
+          <svg viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1z"/></svg>
+          <span>总览</span>
+        </button>
+        <button class="nav-item" data-act="nav" data-view="files">
+          <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span>文件库</span>
+        </button>
+        <button class="nav-item" data-act="nav" data-view="cloud">
+          <svg viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.7-7.94A5.5 5.5 0 0 1 17 9.3 3.5 3.5 0 0 1 16.5 18z"/></svg>
+          <span>云端与续费</span>
+        </button>
+        <button class="nav-item" data-act="nav" data-view="transfer">
+          <svg viewBox="0 0 24 24"><path d="M4 7h13m0 0-3-3m3 3-3 3M20 17H7m0 0 3-3m-3 3 3 3"/></svg>
+          <span>迁出与迁回</span>
+        </button>
+        <button class="nav-item" data-act="nav" data-view="drive">
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="5" rx="2"/><path d="M7 8.5h.01M7 16.5h.01"/></svg>
+          <span>虚拟磁盘</span>
+        </button>
+        <button class="nav-item" data-act="nav" data-view="phone">
+          <svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>
+          <span>手机访问</span>
+        </button>
+      </nav>
+      <div class="side-foot">
+        <button class="nav-item" data-act="nav" data-view="settings">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 8.98 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.62 15a1.7 1.7 0 0 0-1.56-1.03H3v-4h.08A1.7 1.7 0 0 0 4.62 8.98a1.7 1.7 0 0 0-.34-1.87l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 8.98 4.6 1.7 1.7 0 0 0 10 3.05V3h4v.08a1.7 1.7 0 0 0 1.03 1.54 1.7 1.7 0 0 0 1.87-.34l.06-.06 2.83 2.83-.06.06a1.7 1.7 0 0 0-.34 1.87A1.7 1.7 0 0 0 20.95 10H21v4h-.08A1.7 1.7 0 0 0 19.4 15z"/></svg>
+          <span>设置与帮助</span>
+        </button>
+        <div class="side-state"><i id="side-dot"></i><span id="side-device">本机</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="top">
+        <div class="top-title">
+          <p class="eyebrow" id="page-kicker">工作台</p>
+          <h2 id="page-title">总览</h2>
+        </div>
+        <div class="top-actions">
+          <span class="status-chip" id="conn-chip"><i></i><b>本地代理在线</b></span>
+          <button class="btn btn-ghost" data-act="open-manual">使用手册</button>
+          <button class="btn btn-primary" data-act="scan-modal">一键扫描</button>
+        </div>
+      </header>
+      <div class="scroll" id="view"></div>
+    </main>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toasts" class="toasts"></div>
+  <div id="jobdock" class="jobdock"></div>
+  <script src="app.js"></script>
+</body>
+</html>
