@@ -1,0 +1,59 @@
+name: Windows 安装包
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 构建安装包
+        shell: cmd
+        run: call build-release.bat
+
+      - name: 计算校验值
+        shell: pwsh
+        run: |
+          $f = Get-ChildItem desktop/release/StorageBear-Setup-*.exe | Select-Object -First 1
+          "SHA256  $($f.Name)  $((Get-FileHash $f.FullName -Algorithm SHA256).Hash)" |
+            Out-File -Encoding ascii desktop/release/SHA256.txt
+          Get-Content desktop/release/SHA256.txt
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: StorageBear-Setup-${{ github.ref_name }}
+          path: |
+            desktop/release/StorageBear-Setup-*.exe
+            desktop/release/SHA256.txt
+          if-no-files-found: error
+          retention-days: 14
