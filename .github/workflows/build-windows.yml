@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
     timeout-minutes: 40
     env:
       ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
@@ -34,10 +34,24 @@ jobs:
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
+
+      - name: 安装 Electron 依赖
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: 检查 app-builder
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "desktop/node_modules/app-builder-bin/win/x64/app-builder.exe").Path
+          Get-Item $exe | Format-List FullName, Length, LastWriteTime
+          & $exe --help
+          Write-Host "app-builder exit code: $LASTEXITCODE"
 
       - name: 构建安装包
         shell: cmd
+        env:
+          DEBUG: electron-builder
         run: call build-release.bat
 
       - name: 计算校验值
