@@ -40,14 +40,6 @@ jobs:
         working-directory: desktop
         run: npm install --no-audit --no-fund
 
-      - name: 检查 app-builder
-        shell: pwsh
-        run: |
-          $exe = (Resolve-Path "desktop/node_modules/app-builder-bin/win/x64/app-builder.exe").Path
-          Get-Item $exe | Format-List FullName, Length, LastWriteTime
-          & $exe --help
-          Write-Host "app-builder exit code: $LASTEXITCODE"
-
       - name: 构建安装包
         shell: cmd
         env:
