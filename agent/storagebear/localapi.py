@@ -297,6 +297,8 @@ def _handler(agent, token):
                 return 200, a.drive.mount()
             if method == "POST" and path == "/api/drive/unmount":
                 return 200, a.drive.unmount()
+            if method == "POST" and path == "/api/drive/repair":
+                return 200, a.drive.repair()
             if method == "POST" and path == "/api/drive/config":
                 kw = {}
                 if "auto" in data:

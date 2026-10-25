@@ -3,9 +3,13 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
+let autoUpdater = null;
+try { ({ autoUpdater } = require("electron-updater")); } catch (_) {}
 
 const PUBLIC = (process.env.SB_PUBLIC_URL || "https://www.ai-xiehao.me").replace(/\/+$/, "");
 const DEV = !app.isPackaged;
+const HIDDEN = process.argv.includes("--hidden");
+const UPD = { owner: "xiehao-001", repo: "ossbear-releases" };
 const DATA = path.join(app.getPath("appData"), "StorageBear");
 app.setName("StorageBear");
 try { app.setPath("userData", DATA); } catch (_) {}
@@ -99,7 +103,7 @@ async function backend() {
   throw new Error("本地代理启动超时，请查看日志：" + path.join(DATA, "agent", "logs"));
 }
 
-function local(route, method, data) {
+function local(route, method, data, timeout) {
   return backend().then((rt) => new Promise((resolve, reject) => {
     const body = data === undefined ? null : Buffer.from(JSON.stringify(data), "utf8");
     const req = http.request({
@@ -107,7 +111,7 @@ function local(route, method, data) {
       port: rt.port,
       path: route,
       method: method || "GET",
-      timeout: 120000,
+      timeout: timeout || 120000,
       headers: Object.assign({
         "X-SB-Token": rt.token,
         "Accept": "application/json",
@@ -133,6 +137,139 @@ function local(route, method, data) {
     if (body) req.write(body);
     req.end();
   }));
+}
+
+let updateBusy = false;
+let updateChecked = false;
+let updatePrompt = false;
+let pendingUpdate = null;
+let manualCheck = false;
+
+function updaterReady() {
+  return !DEV && !!autoUpdater;
+}
+
+function updateLog(level, ...args) {
+  const text = args.map((x) => (x instanceof Error ? (x.stack || x.message) : typeof x === "string" ? x : JSON.stringify(x))).join(" ");
+  log("update " + level + ": " + text);
+}
+
+async function showUpdate(info) {
+  if (updatePrompt) return;
+  if (!win || !win.isVisible()) {
+    pendingUpdate = info;
+    return;
+  }
+  updatePrompt = true;
+  pendingUpdate = null;
+  try {
+    const r = await dialog.showMessageBox(win, {
+      type: "info",
+      title: "发现新版本",
+      message: "存储熊 " + info.version,
+      detail: "当前版本 " + app.getVersion() + "。更新会从 GitHub Releases 下载，完成后可重启安装。",
+      buttons: ["下载更新", "稍后"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (r.response === 0) await autoUpdater.downloadUpdate();
+    else updatePrompt = false;
+  } catch (e) {
+    updatePrompt = false;
+    updateLog("error", e);
+    if (win) dialog.showMessageBox(win, { type: "warning", title: "更新失败", message: "更新下载没有开始", detail: e.message });
+  }
+}
+
+async function askManual(manual, message, detail) {
+  if (!manual || !win) return;
+  await dialog.showMessageBox(win, { type: "info", title: "检查更新", message, detail, noLink: true });
+}
+
+async function checkUpdate(manual) {
+  if (!updaterReady()) {
+    await askManual(manual, DEV ? "开发模式不检查更新" : "更新组件不可用", DEV ? "打包后的 Windows 客户端会从 GitHub Releases 检查更新。" : "当前安装可能缺少更新组件，请重新安装。");
+    return false;
+  }
+  if (updateBusy) return false;
+  if (!manual) {
+    if (updateChecked) return false;
+    updateChecked = true;
+  }
+  updateBusy = true;
+  manualCheck = !!manual;
+  try {
+    const r = await autoUpdater.checkForUpdates();
+    if (!r && manualCheck) {
+      manualCheck = false;
+      await askManual(true, "已是最新版本", "当前版本 " + app.getVersion() + "。");
+    }
+    return !!r;
+  } catch (e) {
+    updateLog("error", e);
+    if (manualCheck) {
+      manualCheck = false;
+      await askManual(true, "暂时无法检查更新", "请稍后再试，或确认网络可以访问 GitHub Releases。\n\n" + e.message);
+    }
+    return false;
+  } finally {
+    updateBusy = false;
+  }
+}
+
+function setupUpdates() {
+  if (!updaterReady()) return;
+  autoUpdater.logger = {
+    info: (...a) => updateLog("info", ...a),
+    warn: (...a) => updateLog("warn", ...a),
+    error: (...a) => updateLog("error", ...a),
+    debug: () => {},
+  };
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowDowngrade = false;
+  try {
+    autoUpdater.setFeedURL({ provider: "github", owner: UPD.owner, repo: UPD.repo });
+  } catch (e) {
+    updateLog("error", e);
+  }
+  autoUpdater.on("update-available", (info) => {
+    manualCheck = false;
+    showUpdate(info);
+  });
+  autoUpdater.on("update-not-available", async () => {
+    const wasManual = manualCheck;
+    manualCheck = false;
+    if (wasManual) await askManual(true, "已是最新版本", "当前版本 " + app.getVersion() + "。");
+  });
+  autoUpdater.on("download-progress", (p) => {
+    try { if (win) win.setProgressBar(Math.max(0, Math.min(1, p.percent / 100))); } catch (_) {}
+  });
+  autoUpdater.on("update-downloaded", async (info) => {
+    updatePrompt = false;
+    try { if (win) win.setProgressBar(-1); } catch (_) {}
+    if (!win) return;
+    const r = await dialog.showMessageBox(win, {
+      type: "info",
+      title: "更新已下载",
+      message: "存储熊 " + info.version + " 已准备好",
+      detail: "立即重启会关闭当前的虚拟磁盘并完成安装。也可以选择稍后，下次退出时自动安装。",
+      buttons: ["立即重启安装", "稍后"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (r.response === 0) {
+      try { autoUpdater.quitAndInstall(false, true); } catch (e) { updateLog("error", e); }
+    }
+  });
+  autoUpdater.on("error", (e) => {
+    updateLog("error", e);
+    updatePrompt = false;
+    try { if (win) win.setProgressBar(-1); } catch (_) {}
+  });
+  setTimeout(() => { if (win && win.isVisible()) checkUpdate(false); }, 12000);
 }
 
 function qs(obj) {
@@ -179,6 +316,7 @@ const calls = {
   syncMeta: () => ({ route: "/api/sync/meta", method: "POST", data: {} }),
   drive: () => ({ route: "/api/drive" }),
   driveAction: (a) => ({ route: "/api/drive/" + encodeURIComponent(a.action), method: "POST", data: {} }),
+  driveRepair: () => ({ route: "/api/drive/repair", method: "POST", data: {}, timeout: 240000 }),
   driveConfig: (a) => ({ route: "/api/drive/config", method: "POST", data: a }),
 };
 
@@ -202,8 +340,12 @@ function createWindow() {
   });
   win.loadFile(path.join(__dirname, "renderer", "index.html"));
   win.once("ready-to-show", () => {
-    const hidden = app.getLoginItemSettings && app.getLoginItemSettings().wasOpenedAtLogin;
+    const hidden = HIDDEN || (process.platform === "darwin" && app.getLoginItemSettings && app.getLoginItemSettings().wasOpenedAtLogin);
     if (!hidden) win.show();
+  });
+  win.on("show", () => {
+    if (pendingUpdate) showUpdate(pendingUpdate);
+    else setTimeout(() => checkUpdate(false), 1500);
   });
   win.on("close", (e) => {
     if (!quitting && tray) {
@@ -281,6 +423,7 @@ if (!gotLock) {
     }
     createWindow();
     makeTray();
+    setupUpdates();
     Menu.setApplicationMenu(process.platform === "darwin" ? Menu.buildFromTemplate([{ role: "appMenu" }, { role: "editMenu" }]) : null);
     app.on("activate", () => {
       if (!win) createWindow();
@@ -304,7 +447,7 @@ ipcMain.handle("sb:call", async (event, name, args) => {
   const fn = calls[name];
   if (!fn) throw new Error("未知接口：" + name);
   const c = fn(args || {});
-  return local(c.route, c.method || "GET", c.data);
+  return local(c.route, c.method || "GET", c.data, c.timeout);
 });
 
 ipcMain.handle("sb:app-info", () => ({
@@ -315,7 +458,15 @@ ipcMain.handle("sb:app-info", () => ({
   logFile: path.join(DATA, "agent", "logs", "agent.log"),
   platform: process.platform,
   autoStart: app.getLoginItemSettings ? app.getLoginItemSettings().openAtLogin : false,
+  updates: updaterReady(),
 }));
+
+ipcMain.handle("sb:check-update", async (event) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  await checkUpdate(true);
+  return true;
+});
 
 ipcMain.handle("sb:choose-dirs", async () => {
   const r = await dialog.showOpenDialog(win, {
@@ -354,6 +505,6 @@ ipcMain.handle("sb:open-folder", async (e, kind) => {
 
 ipcMain.handle("sb:auto-start", (e, on) => {
   if (DEV) return false;
-  app.setLoginItemSettings({ openAtLogin: !!on, openAsHidden: true });
+  app.setLoginItemSettings({ openAtLogin: !!on, openAsHidden: true, args: ["--hidden"] });
   return app.getLoginItemSettings().openAtLogin;
 });

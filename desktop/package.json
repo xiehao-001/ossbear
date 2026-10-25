@@ -1,7 +1,7 @@
 {
   "name": "storagebear",
   "productName": "存储熊",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "把火山、阿里、腾讯、华为等对象存储变成一块好用的虚拟磁盘",
   "main": "src/main.js",
   "author": "StorageBear",
@@ -11,9 +11,12 @@
     "start": "electron .",
     "dev": "SB_DEV=1 electron .",
     "pack": "electron-builder --dir",
-    "dist:win": "electron-builder --win nsis --x64",
+    "dist:win": "electron-builder --win nsis --x64 --publish never",
     "dist:linux": "electron-builder --linux AppImage --x64",
     "dist:mac": "electron-builder --mac dmg --x64 --arm64"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
   },
   "devDependencies": {
     "electron": "31.7.7",
@@ -40,6 +43,14 @@
         "filter": [
           "**/*"
         ]
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "xiehao-001",
+        "repo": "ossbear-releases",
+        "releaseType": "release"
       }
     ],
     "win": {

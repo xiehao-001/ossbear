@@ -1,12 +1,15 @@
 import base64
 import hmac
 import http.server
+import json
 import os
 import re
 import shutil
 import socket
 import socketserver
+import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 from email.utils import formatdate
@@ -17,6 +20,109 @@ from . import ops, util
 
 DAV = "/dav"
 RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
+
+REPAIR_PS = r"""
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+$out = [ordered]@{
+  ok = $false
+  feature = ''
+  service = ''
+  start = ''
+  basic = 0
+  mrxdav = ''
+  restart = $false
+  errors = @()
+}
+$log = '__LOG__'
+function Add-Log([string]$s) {
+  try { Add-Content -LiteralPath $log -Value ((Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' ' + $s) -Encoding UTF8 } catch {}
+}
+try {
+  Add-Log 'repair begin'
+  $opt = Get-WindowsOptionalFeature -Online -FeatureName FS-WebDAV-Redirector -ErrorAction SilentlyContinue
+  if ($null -eq $opt) {
+    $out.errors += '未找到 WebDAV Redirector 组件'
+    Add-Log 'feature not found'
+  } else {
+    $out.feature = [string]$opt.State
+    Add-Log ('feature ' + $out.feature)
+    if ($opt.State -ne 'Enabled') {
+      $r = Enable-WindowsOptionalFeature -Online -FeatureName FS-WebDAV-Redirector -All -NoRestart -ErrorAction SilentlyContinue
+      if ($r -and $r.RestartNeeded) { $out.restart = $true }
+      $opt = Get-WindowsOptionalFeature -Online -FeatureName FS-WebDAV-Redirector -ErrorAction SilentlyContinue
+      if ($opt) { $out.feature = [string]$opt.State }
+      Add-Log ('feature now ' + $out.feature)
+    }
+  }
+  $svc = Get-Service -Name WebClient -ErrorAction SilentlyContinue
+  if ($null -eq $svc) {
+    $out.errors += 'WebClient 服务不存在'
+  } else {
+    Set-Service -Name WebClient -StartupType Automatic -ErrorAction SilentlyContinue
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\WebClient\Parameters'
+    $regkey = 'HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters'
+    if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+    $reg = Join-Path $env:SystemRoot 'System32\reg.exe'
+    & $reg add $regkey /v BasicAuthLevel /t REG_DWORD /d 2 /f | Out-Null
+    if ($LASTEXITCODE -ne 0) { $out.errors += '写入 BasicAuthLevel 失败' }
+    & $reg add $regkey /v FileSizeLimitInBytes /t REG_DWORD /d 4294967295 /f | Out-Null
+    if ($LASTEXITCODE -ne 0) { $out.errors += '写入 FileSizeLimitInBytes 失败' }
+    try {
+      Restart-Service -Name WebClient -Force -ErrorAction Stop
+    } catch {
+      try { Start-Service -Name WebClient -ErrorAction Stop }
+      catch { $out.errors += ('启动 WebClient 失败：' + $_.Exception.Message) }
+    }
+    for ($i = 0; $i -lt 10; $i++) {
+      Start-Sleep -Milliseconds 400
+      $svc = Get-Service -Name WebClient -ErrorAction SilentlyContinue
+      if ($svc -and $svc.Status -eq 'Running') { break }
+    }
+    $dav = Get-Service -Name MRxDAV -ErrorAction SilentlyContinue
+    if ($dav -and $dav.Status -ne 'Running') {
+      try { Start-Service -Name MRxDAV -ErrorAction Stop } catch { $out.errors += 'MRxDAV 驱动没有启动' }
+    }
+    $svc = Get-Service -Name WebClient -ErrorAction SilentlyContinue
+    if ($svc) {
+      $out.service = [string]$svc.Status
+      $wmi = Get-CimInstance Win32_Service -Filter "Name='WebClient'" -ErrorAction SilentlyContinue
+      if ($wmi) { $out.start = [string]$wmi.StartMode }
+    }
+    try { $out.basic = [int](Get-ItemProperty -Path $key -Name BasicAuthLevel -ErrorAction Stop).BasicAuthLevel } catch {}
+    $dav = Get-Service -Name MRxDAV -ErrorAction SilentlyContinue
+    if ($dav) { $out.mrxdav = [string]$dav.Status }
+    $out.ok = ($out.service -eq 'Running')
+  }
+} catch {
+  $out.errors += $_.Exception.Message
+  Add-Log ('repair error: ' + $_.Exception.Message)
+}
+try {
+  $out | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath '__RESULT__' -Encoding UTF8
+} catch {}
+Add-Log ('repair end ok=' + $out.ok + ' restart=' + $out.restart)
+if ($out.ok) { exit 0 }
+if ($out.restart) { exit 3 }
+exit 2
+"""
+
+LAUNCH_PS = r"""
+$ErrorActionPreference = 'Stop'
+try {
+  $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+  $p = Start-Process -FilePath $ps -Verb RunAs -WindowStyle Hidden -Wait -PassThru `
+    -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', '__CODE__')
+  exit $p.ExitCode
+} catch {
+  Write-Output $_.Exception.Message
+  exit 1223
+}
+"""
+
+
+def _psq(p):
+    return str(p).replace("'", "''")
 
 
 def _roots(agent):
@@ -69,7 +175,7 @@ def _neterr(out, err, code):
     low = text.lower()
     hit = re.search(r"(?:system error|系统错误)\s*[:：]?\s*(\d+)", text, re.I)
     hints = {
-        67: "Windows 的 WebClient 服务未运行，或网络名称无法解析。请重新运行存储熊安装程序修复 WebDAV 组件，再重试挂载。",
+        67: "Windows 的 WebClient 服务未运行，或系统没有启用 WebDAV 客户端。点「一键修复并重试」，按提示允许一次管理员授权即可。",
         85: "盘符已被占用，请在「虚拟磁盘」页换一个盘符，或先卸载原来的网络盘。",
         1219: "该盘符已被其他账号连接。请先断开原有连接，再回到存储熊挂载。",
         1244: "当前登录账号无权映射网络驱动器。请用管理员账号安装并启动存储熊。",
@@ -173,6 +279,61 @@ class Drive:
         except Exception:
             pass
 
+    def repair(self):
+        if os.name != "nt":
+            raise RuntimeError("一键修复仅支持 Windows")
+        tmp = util.path("tmp")
+        os.makedirs(tmp, exist_ok=True)
+        result = os.path.join(tmp, "repair-webdav.json")
+        logf = util.path("logs", "repair-webdav.log")
+        try:
+            os.remove(result)
+        except OSError:
+            pass
+        body = REPAIR_PS.replace("__LOG__", _psq(logf)).replace("__RESULT__", _psq(result))
+        enc = base64.b64encode(body.encode("utf-16le")).decode("ascii")
+        cmd = LAUNCH_PS.replace("__CODE__", enc)
+        ps = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32",
+                          "WindowsPowerShell", "v1.0", "powershell.exe")
+        try:
+            code, out, err = util.popen(
+                [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+                timeout=180)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("修复等待超时。请确认是否在管理员授权窗口点击了“是”，然后重试")
+        text = (err or out or "").strip()
+        res = None
+        try:
+            with open(result, "r", encoding="utf-8-sig") as f:
+                x = json.load(f)
+            res = x if isinstance(x, dict) else None
+        except Exception:
+            res = None
+        if not res:
+            util.log("repair-webdav: code=%s %s" % (code, text))
+            low = text.lower()
+            if code == 1223 or "cancel" in low or "取消" in text or "拒绝" in text:
+                raise RuntimeError("已取消管理员授权。修复 Windows WebDAV 组件需要一次管理员权限，"
+                                   "请重试并在系统弹窗中选择“是”")
+            raise RuntimeError("自动修复没有完成，可能被安全软件拦截。请先重启电脑再试；"
+                               "仍失败时请查看日志中的 repair-webdav.log")
+        errs = res.get("errors") or []
+        if isinstance(errs, str):
+            errs = [errs]
+        errs = [str(x) for x in errs if str(x).strip()]
+        util.log("repair-webdav: ok=%s service=%s feature=%s basic=%s errors=%s" %
+                 (res.get("ok"), res.get("service"), res.get("feature"), res.get("basic"), errs))
+        if res.get("ok"):
+            time.sleep(1)
+            return {"repaired": True, "restart": bool(res.get("restart")),
+                    "service": res.get("service") or "", "feature": res.get("feature") or "",
+                    "basic": int(res.get("basic") or 0)}
+        if res.get("restart") or res.get("feature") == "EnablePending":
+            raise RuntimeError("WebDAV 组件已启用，但 Windows 需要重启后才会生效。请重启电脑，"
+                               "再打开存储熊点击“挂载为网络盘”")
+        msg = "；".join(errs) if errs else "WebClient 服务没有启动"
+        raise RuntimeError("修复没有完全成功：%s。请重启电脑后重试，或查看 repair-webdav.log" % msg)
+
     def mounted(self):
         if os.name != "nt":
             return False
@@ -272,7 +433,16 @@ def _handler(agent, user, pw):
                     pass
 
         def _deny(self):
-            self._send(401, b"StorageBear", extra={"WWW-Authenticate": 'Basic realm="StorageBear"'})
+            self.close_connection = True
+            self._send(401, b"StorageBear", extra={"WWW-Authenticate": 'Basic realm="StorageBear"', "Connection": "close"})
+
+        def _drain(self):
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if 0 < n <= 1024 * 1024:
+                    self.rfile.read(n)
+            except Exception:
+                pass
 
         def _parts(self):
             u = urlsplit(self.path)
@@ -351,11 +521,13 @@ def _handler(agent, user, pw):
                     % (escape(href), _attr(name), size, _date(mtime), etag, _attr(ctype)))
 
         def do_OPTIONS(self):
+            self._drain()
             if not self._auth():
                 return self._deny()
             self._send(200, b"", extra={"Allow": "OPTIONS, GET, HEAD, PROPFIND"})
 
         def do_PROPFIND(self):
+            self._drain()
             if not self._auth():
                 return self._deny()
             parts = self._parts()
@@ -410,6 +582,7 @@ def _handler(agent, user, pw):
             return a, b, True
 
         def do_HEAD(self):
+            self._drain()
             if not self._auth():
                 return self._deny()
             parts = self._parts()
@@ -434,6 +607,7 @@ def _handler(agent, user, pw):
             self.end_headers()
 
         def do_GET(self):
+            self._drain()
             if not self._auth():
                 return self._deny()
             parts = self._parts()

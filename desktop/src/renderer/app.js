@@ -261,6 +261,7 @@ async function boot() {
   } else {
     showAuth("login");
   }
+  setTimeout(maybeAskAutoStart, 1000);
 }
 
 function showAuth(mode = "login") {
@@ -392,6 +393,23 @@ async function enterApp() {
   startPoll();
   const h = location.hash.replace(/^#\/?/, "");
   setView(PAGE[h] ? h : "dashboard");
+}
+
+function maybeAskAutoStart() {
+  const info = st.info || {};
+  if (info.dev || info.platform !== "win32") return;
+  try {
+    if (info.autoStart) { localStorage.setItem("sb.autostart.asked.v1", "1"); return; }
+    if (localStorage.getItem("sb.autostart.asked.v1")) return;
+    localStorage.setItem("sb.autostart.asked.v1", "1");
+  } catch (_) { return; }
+  openModal({
+    title: "以后开机就自动运行？",
+    sub: "只需设置一次，之后登录 Windows 时会安静地待在托盘里。",
+    body: `<p class="confirm-text">开启后，存储熊会随 Windows 启动，让文件库、云端任务和虚拟磁盘更早恢复在线。启动时不会弹出主窗口，也不会自动修改你的文件。</p>
+      <div class="form-note mt12">可以随时在「设置与帮助 → 这台电脑」中关闭。安装或升级后只会询问一次。</div>`,
+    foot: `<button class="btn btn-ghost" data-act="autostart-no">暂不开启</button><button class="btn btn-primary" data-act="autostart-yes">开机自动启动</button>`,
+  });
 }
 
 function chrome() {
@@ -1104,10 +1122,10 @@ async function viewDrive() {
   const running = !!d.running;
   const state = mounted ? '<span class="tag green">已挂载</span>' : running ? '<span class="tag amber">服务就绪</span>' : '<span class="tag">未启动</span>';
   const steps = win ? `<ol class="mount-steps">
-      <li>保持存储熊在托盘运行。安装程序会尝试启用 Windows 的 WebDAV 客户端（WebClient）。</li>
+      <li>保持存储熊在托盘运行。安装程序会自动启用 Windows 的 WebDAV 客户端（WebClient）。</li>
       <li>点击「挂载为网络盘」，存储熊会使用专用账号把只读盘映射到空闲盘符。</li>
       <li>在「此电脑」中打开 <b>${e(d.letter || "网络盘")}</b>，可浏览常用目录与云端副本文件。</li>
-      <li>无需时点击「卸载网络盘」。重启电脑后可在设置中开启自动启动，再手动挂载。</li>
+      <li>挂载失败时点「一键修复 WebDAV」，在 Windows 弹窗中选「是」，随后会自动重试；无需输入命令。</li>
     </ol>` : `<ol class="mount-steps">
       <li>确认存储熊正在运行，且「WebDAV 服务」显示已就绪。</li>
       <li>${(st.info && st.info.platform) === "darwin" ? "打开 Finder → 前往 → 连接服务器，输入下方地址。" : "在文件管理器中使用「连接服务器 / 其他位置」，或运行 <code>gio mount dav://127.0.0.1:" + Number(d.port || 0) + "/dav/</code>。"}</li>
@@ -1149,7 +1167,8 @@ async function viewDrive() {
         <div class="card card-pad">
           <div class="card-title-row"><div><h3>${win ? "Windows 挂载步骤" : "macOS / Linux 连接步骤"}</h3><p>${win ? "首次使用可能需要启用 WebClient 服务。" : "使用系统内置的 WebDAV 客户端即可。"}</p></div><span class="tag">${win ? "Windows" : (st.info && st.info.platform === "darwin" ? "macOS" : "Linux")}</span></div>
           ${steps}
-          ${win ? `<div class="form-note mt12"><b>挂载失败？</b>存储熊会自动检查 WebClient 并尝试两种挂载方式；仍失败时请重新运行安装程序修复 WebDAV 组件，或换一个盘符。连接信息只在本机有效。</div>` : `<div class="form-note mt12"><b>提示：</b>本机地址仅在这台电脑上有效。系统文件管理器对 WebDAV 的兼容性不同，若无法认证，可先启动服务再重试。</div>`}
+          ${win ? `<div class="form-note mt12"><b>挂载失败？</b>点下面的一键修复，存储熊会自动处理 WebClient、HTTP 基本认证和旧映射，不需要你在命令行执行 NET USE。修复需要一次 Windows 管理员授权。</div>
+          <div class="row mt12"><button class="btn btn-sm btn-ghost" data-act="drive-repair">一键修复 WebDAV</button><span class="tiny faint">只在挂载失败时使用，不会修改你的文件。</span></div>` : `<div class="form-note mt12"><b>提示：</b>本机地址仅在这台电脑上有效。系统文件管理器对 WebDAV 的兼容性不同，若无法认证，可先启动服务再重试。</div>`}
         </div>
       </div>
     </div>
@@ -1242,7 +1261,7 @@ async function viewSettings() {
         </div>
         <div class="card card-pad">
           <div class="panel-head"><div><h3>关于</h3><p>本地代理 ${e(info.version || s.version || "")} · 数据仅存于本机与你的云存储。</p></div><span class="tag indigo">存储熊</span></div>
-          <div class="row"><button class="btn btn-sm btn-ghost" data-act="settings-drive">${IC.drive} 虚拟磁盘</button><button class="btn btn-sm btn-ghost" data-act="phone-guide">${IC.phone} 手机访问（开发中）</button></div>
+          <div class="row"><button class="btn btn-sm btn-ghost" data-act="settings-drive">${IC.drive} 虚拟磁盘</button><button class="btn btn-sm btn-ghost" data-act="settings-update" ${info.dev ? "disabled" : ""}>${IC.refresh} 检查更新</button><button class="btn btn-sm btn-ghost" data-act="phone-guide">${IC.phone} 手机访问（开发中）</button></div>
           <p class="tiny faint" style="line-height:1.7;margin:12px 0 0">使用手册与产品文案由 AI 辅助创作并经人工整理。对象存储兼容性以各云厂商公开文档与你实际创建的 Bucket 为准。</p>
         </div>
       </div>
@@ -1453,16 +1472,55 @@ async function doShare(path) {
 function mountHelp(err) {
   openModal({
     title: "网络盘挂载没有成功",
-    sub: "存储熊已自动启动 WebDAV 客户端、清理旧映射，并尝试了 URL 与 UNC 两种连接方式。",
+    sub: "不用输入任何命令：点“一键修复并重试”，剩下的交给存储熊。",
     body: `<p class="confirm-text">${e(errMsg(err))}</p>
       <ol class="mount-steps mt12">
-        <li>如果提示 WebClient 或系统错误 67，请重新运行 0.1.4 安装包修复组件，然后重启电脑再试。</li>
-        <li>确认「此电脑」中没有占用同一盘符的旧连接；安装包已自动启用 WebDAV 客户端与 HTTP 基本认证。</li>
-        <li>仍失败时，到「虚拟磁盘」页手动换一个盘符（如 Z），再点击挂载。无需在命令行执行 NET USE。</li>
+        <li>点下方「一键修复并重试」。Windows 弹出管理员授权时选择「是」，修复完成后会自动再挂载一次。</li>
+        <li>修复会自动启用 WebDAV 客户端、设置 HTTP 基本认证、把 WebClient 改为自动启动并重新启动它，不会改动你的文件。</li>
+        <li>如果提示需要重启电脑，请重启后再点「挂载为网络盘」；仍失败可以换一个盘符（如 Z）。</li>
       </ol>
-      <div class="form-note mt12">挂载只在本机回环地址进行，不会把文件或密钥暴露到局域网。若公司电脑受组策略限制，可能需要联系管理员放行 WebDAV 客户端。</div>`,
-    foot: `<button class="btn btn-ghost" data-act="drive-goto">去换盘符</button><button class="btn btn-primary" data-act="drive-retry">重试挂载</button>`,
+      <div class="form-note mt12">公司电脑的组策略或安全软件可能禁止 WebDAV，这种情况需要管理员放行。挂载只在本机 127.0.0.1 进行，不会把文件或密钥暴露到局域网。</div>`,
+    foot: `<button class="btn btn-ghost" data-act="drive-goto">去换盘符</button><button class="btn btn-ghost" data-act="drive-retry">仅重试</button><button class="btn btn-primary" data-act="drive-repair">一键修复并重试</button>`,
   });
+}
+
+async function repairDrive() {
+  const m = openModal({
+    title: "正在一键修复 WebDAV",
+    sub: "Windows 会弹出一次管理员授权窗口，请点击「是」。",
+    body: `<div class="row" style="align-items:center;gap:10px">${spinner()}<b>正在启用 WebDAV 客户端并重启 WebClient 服务…</b></div>
+      <div class="form-note mt16">通常需要十几秒，请不要关闭存储熊。修复完成后会自动重新挂载；若系统提示需要重启，请重启电脑后再挂载。</div>`,
+  });
+  try {
+    const r = await api.repairDrive();
+    m.close();
+    await refreshAll().catch(() => {});
+    await render();
+    if (r && r.restart) {
+      openModal({
+        title: "修复完成，还需要重启电脑",
+        sub: "系统组件已经启用，但 Windows 要重启后才生效。",
+        body: `<p class="confirm-text">重启电脑后再打开存储熊，点击「挂载为网络盘」即可。之后如果仍然失败，可以在「虚拟磁盘」页再点一次「一键修复 WebDAV」。</p>`,
+        foot: `<button class="btn btn-primary" data-act="close-modal">知道了</button>`,
+      });
+      return;
+    }
+    toast("WebDAV 组件已修复，正在重新挂载", "ok");
+    await doDrive("mount");
+  } catch (err) {
+    m.close();
+    openModal({
+      title: "一键修复没有完成",
+      sub: "不用敲命令，可以按下面的顺序再试。",
+      body: `<p class="confirm-text">${e(errMsg(err))}</p>
+        <ol class="mount-steps mt12">
+          <li>如果刚刚关掉了管理员授权弹窗，请再点一次修复，并在系统弹窗中选择「是」。</li>
+          <li>如果安全软件拦截了 PowerShell，请暂时允许，或重启电脑后重试。</li>
+          <li>仍然失败时，打开日志目录，把 <code>repair-webdav.log</code> 发给部署者。</li>
+        </ol>`,
+      foot: `<button class="btn btn-ghost" data-act="open-logs">打开日志</button><button class="btn btn-primary" data-act="drive-repair">再试一次</button>`,
+    });
+  }
 }
 
 async function doDrive(action) {
@@ -1712,6 +1770,9 @@ document.addEventListener("click", async (ev) => {
       } else if (act === "drive-goto") {
         closeModalEl(el);
         setView("drive");
+      } else if (act === "drive-repair") {
+        closeModalEl(el);
+        await repairDrive();
       } else if (act === "drive-refresh") {
         await refreshAll(); await render();
       } else if (act === "drive-copy") {
@@ -1744,6 +1805,20 @@ document.addEventListener("click", async (ev) => {
         if (st.info) st.info.autoStart = on;
         await render();
         toast(on ? "已开启开机启动" : "已关闭开机启动", "ok");
+      } else if (act === "autostart-yes") {
+        closeModalEl(el);
+        try {
+          const on = await api.setAutoStart(true);
+          if (st.info) st.info.autoStart = on;
+          toast(on ? "已开启开机自动启动" : "Windows 没有接受自启动设置", on ? "ok" : "error");
+        } catch (err) {
+          toast(errMsg(err), "error", "设置失败");
+        }
+      } else if (act === "autostart-no") {
+        closeModalEl(el);
+      } else if (act === "settings-update") {
+        buttonBusy(el, true, "检查中");
+        try { await api.checkUpdate(); } catch (err) { toast(errMsg(err), "error", "检查更新失败"); } finally { buttonBusy(el, false); }
       } else if (act === "settings-sync") {
         buttonBusy(el, true, "同步中");
         try { await api.syncMeta(); await refreshAll(); await render(); toast("元数据已同步到服务器", "ok"); } finally { buttonBusy(el, false); }
