@@ -226,6 +226,7 @@ class Drive:
                     self.agent.cfg = c
                     return self.info()
                 errs.append(_neterr(out, err, code))
+                self._unmap(letter)
         raise RuntimeError("\n\n".join(x for i, x in enumerate(errs) if x and x not in errs[:i]))
 
     def unmount(self):

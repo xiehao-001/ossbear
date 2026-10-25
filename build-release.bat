@@ -31,6 +31,6 @@ pushd desktop
 call npm run dist:win || (popd & echo 安装包构建失败。& exit /b 1)
 popd
 echo.
-echo 完成：desktop\release\StorageBear-Setup-0.1.3.exe
+echo 完成：desktop\release\StorageBear-Setup-0.1.4.exe
 echo 安装时才会联网获取 Visual C++ 运行库，并启用 WebDAV 客户端。
 exit /b 0

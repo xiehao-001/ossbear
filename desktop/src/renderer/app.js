@@ -1456,12 +1456,12 @@ function mountHelp(err) {
     sub: "存储熊已自动启动 WebDAV 客户端、清理旧映射，并尝试了 URL 与 UNC 两种连接方式。",
     body: `<p class="confirm-text">${e(errMsg(err))}</p>
       <ol class="mount-steps mt12">
-        <li>如果提示 WebClient 或系统错误 67，请重新运行 0.1.3 安装包修复组件，然后重启电脑再试。</li>
+        <li>如果提示 WebClient 或系统错误 67，请重新运行 0.1.4 安装包修复组件，然后重启电脑再试。</li>
         <li>确认「此电脑」中没有占用同一盘符的旧连接；安装包已自动启用 WebDAV 客户端与 HTTP 基本认证。</li>
         <li>仍失败时，到「虚拟磁盘」页手动换一个盘符（如 Z），再点击挂载。无需在命令行执行 NET USE。</li>
       </ol>
       <div class="form-note mt12">挂载只在本机回环地址进行，不会把文件或密钥暴露到局域网。若公司电脑受组策略限制，可能需要联系管理员放行 WebDAV 客户端。</div>`,
-    foot: `<button class="btn btn-ghost" data-act="nav" data-view="drive">去换盘符</button><button class="btn btn-primary" data-act="drive-retry">重试挂载</button>`,
+    foot: `<button class="btn btn-ghost" data-act="drive-goto">去换盘符</button><button class="btn btn-primary" data-act="drive-retry">重试挂载</button>`,
   });
 }
 
@@ -1709,6 +1709,9 @@ document.addEventListener("click", async (ev) => {
       } else if (act === "drive-retry") {
         closeModalEl(el);
         await doDrive("mount");
+      } else if (act === "drive-goto") {
+        closeModalEl(el);
+        setView("drive");
       } else if (act === "drive-refresh") {
         await refreshAll(); await render();
       } else if (act === "drive-copy") {
