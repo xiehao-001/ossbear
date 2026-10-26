@@ -267,8 +267,9 @@ function showAuth(mode = "login") {
   if (codeTimer) { clearInterval(codeTimer); codeTimer = null; }
   $("#app").classList.add("hidden");
   $("#auth").classList.remove("hidden");
-  const server = localStorage.getItem("sb.server") || (st.info && st.info.publicUrl) || "https://www.ai-xiehao.me";
+  const server = localStorage.getItem("sb.server") || (st.info && st.info.publicUrl) || "http://www.ai-xiehao.me";
   const login = mode === "login";
+  const insecure = /^http:\/\//i.test(server);
   $("#auth").innerHTML = `
   <section class="auth-visual">
     <div class="auth-brand"><img src="../../assets/tray.png" alt=""><div><b>存储熊</b><span>STORAGEBEAR</span></div></div>
@@ -301,6 +302,7 @@ function showAuth(mode = "login") {
       <button class="btn btn-primary btn-block btn-lg" type="submit">${login ? "登录存储熊" : "注册并开始"}</button>
     </form>
     <div class="form-note mt12"><b>安全提示：</b>对象存储 AccessKey 不会上传服务器；在 Windows 上由 DPAPI 加密保存在本机。请勿在公共电脑登录。</div>
+    ${insecure ? '<div class="form-note mt8" style="color:#b26a00"><b>当前服务器未启用 HTTPS：</b>登录密码与令牌在传输中不加密。仅在可信网络使用，或请部署者启用 HTTPS 后把服务器地址改为 https://。</div>' : ""}
     <div class="auth-foot">继续即表示同意 <button data-act="open-terms">服务条款</button> 与 <button data-act="open-privacy">隐私说明</button><br><button data-act="open-manual">查看小白使用手册</button> · <button data-act="open-site">了解存储熊</button></div>
   </div></section>`;
   const form = $('[data-form="auth"]');
@@ -661,7 +663,7 @@ function hostOf(u) {
   return String(u || "").replace(/^https?:\/\//i, "").replace(/\/+$/, "");
 }
 function siteUrl(path) {
-  const base = ((st.cfg && st.cfg.server) || (st.info && st.info.publicUrl) || "https://www.ai-xiehao.me").replace(/\/+$/, "");
+  const base = ((st.cfg && st.cfg.server) || (st.info && st.info.publicUrl) || "http://www.ai-xiehao.me").replace(/\/+$/, "");
   return base + path;
 }
 

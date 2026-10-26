@@ -6,7 +6,7 @@ const path = require("path");
 let autoUpdater = null;
 try { ({ autoUpdater } = require("electron-updater")); } catch (_) {}
 
-const PUBLIC = (process.env.SB_PUBLIC_URL || "https://www.ai-xiehao.me").replace(/\/+$/, "");
+const PUBLIC = (process.env.SB_PUBLIC_URL || "http://www.ai-xiehao.me").replace(/\/+$/, "");
 const DEV = !app.isPackaged;
 const HIDDEN = process.argv.includes("--hidden");
 const UPD = { owner: "xiehao-001", repo: "ossbear-releases" };
