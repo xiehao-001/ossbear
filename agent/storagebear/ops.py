@@ -72,6 +72,37 @@ def pick(agent, opts, idx=0):
     return min(pids, key=lambda x: used.get(x, 0))
 
 
+def pick_link(agent, provider_id=""):
+    cfg = util.config()
+    pid = str(provider_id or cfg.get("quick_link_provider") or "")
+    if pid and _ok(agent, pid):
+        return pid
+    pids = usable(agent)
+    if not pids:
+        raise RuntimeError("尚未配置可用的对象存储，请先在「云端」添加并填写密钥")
+    provs = {p["id"]: p for p in agent.db.provs()}
+    now = util.now()
+    cand = []
+    for x in pids:
+        exp = int((provs.get(x) or {}).get("expires_at") or 0)
+        if exp and exp <= now:
+            continue
+        cand.append(x)
+    if not cand:
+        raise RuntimeError("所有云存储都已到期，请先续费或添加新的云存储")
+
+    def score(x):
+        p = provs.get(x) or {}
+        exp = int(p.get("expires_at") or 0)
+        remain = exp if exp > 0 else float("inf")
+        quota = int(p.get("quota_bytes") or 0)
+        used = int(p.get("used_bytes") or 0)
+        free = max(0, quota - used) if quota > 0 else 0
+        return (remain, free)
+
+    return max(cand, key=score)
+
+
 def key(path, prefix=""):
     base = util.safe_name(os.path.basename(path))
     h = hashlib.sha1(util.pkey(path).encode("utf-8")).hexdigest()[:20]
@@ -603,7 +634,7 @@ def serve(agent, t):
                 arch = int((r or {}).get("archived") or 0)
             except Exception:
                 raise RuntimeError("文件已不在本机，且没有可用的云端副本")
-        pid = pick(agent, {"provider_id": (r or {}).get("provider_id")})
+        pid = pick(agent, {"provider_id": pl.get("provider_id") or (r or {}).get("provider_id")})
         s3 = _s3(agent, pid)
         k = (r or {}).get("object_key") if (r or {}).get("provider_id") == pid else ""
         if not k:

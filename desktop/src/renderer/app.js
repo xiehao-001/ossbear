@@ -1330,6 +1330,16 @@ async function viewSettings() {
           <div class="setting-row mt16"><div class="setting-info"><b>开机自动启动</b><p>${info.dev ? "开发模式下不修改系统自启动项。" : "登录系统后在托盘静默启动。状态来自当前用户的 Windows 启动项，可在任务管理器 → 启动应用中核对。"}</p></div><button class="switch ${auto ? "on" : ""}" data-act="settings-auto" aria-label="切换自动启动"></button></div>
           <div class="setting-row"><div class="setting-info"><b>本机数据目录</b><p class="mono tiny">${e(info.dataDir || "")}</p></div><div class="row"><button class="btn btn-sm btn-ghost" data-act="open-data">打开</button><button class="btn btn-sm btn-ghost" data-act="open-logs">日志</button></div></div>
         </div>
+        ${(info.platform || "") === "win32" ? `<div class="card card-pad mb16">
+          <div class="card-title-row"><div><h3>资源管理器右键</h3><p>选中文件即可上传并创建分享链接。</p></div><span class="tag">Windows</span></div>
+          <div class="setting-row"><div class="setting-info"><b>显示「快速创建链接」</b><p>写入当前用户注册表，不需要管理员权限。链接创建后始终写入剪贴板。</p></div><button class="switch ${cfg.quick_menu !== false ? "on" : ""}" data-act="quick-menu" aria-label="切换右键菜单"></button></div>
+          <div class="setting-row"><div class="setting-info"><b>创建后发送系统通知</b><p>关闭后只写剪贴板，不弹系统消息；失败提示仍会保留。</p></div><button class="switch ${cfg.quick_notify !== false ? "on" : ""}" data-act="quick-notify" aria-label="切换系统通知"></button></div>
+          <div class="field mt12"><label>快速创建链接使用的云存储 <small>可指定，也可自动选择</small></label><select class="select" data-quick-provider>
+            <option value="" ${!cfg.quick_link_provider ? "selected" : ""}>自动选择（到期时间优先，其次剩余容量）</option>
+            ${(st.providers || []).map((p) => `<option value="${e(p.id)}" ${cfg.quick_link_provider === p.id ? "selected" : ""}>${e(p.label)}${p.has_key ? "" : "（缺少密钥）"}</option>`).join("")}
+          </select></div>
+          <div class="form-note mt12"><b>自动规则：</b>优先选择到期时间更晚的云存储，未填写到期时间视为无限；到期时间相同时，比较剩余容量（额度 - 已用），余量大的优先。剪贴板写入不可关闭。</div>
+        </div>` : ""}
         <div class="card card-pad">
           <div class="card-title-row"><div><h3>扫描目录与扩展名</h3><p>扫描只索引，不上传文件。</p></div><button class="btn btn-sm btn-ghost" data-act="settings-root-add">${IC.plus} 添加目录</button></div>
           ${roots.length ? `<div style="margin-bottom:12px">${roots.map((r) => `<div class="root-item">${IC.folder}<span class="path" title="${e(r.path)}">${e(r.path)}</span><span class="tag">${e(r.label || "目录")}</span><button class="btn btn-sm btn-icon btn-ghost" title="移除" data-act="settings-root-del" data-path="${au(r.path)}">${IC.trash}</button></div>`).join("")}</div>` : `<div class="banner-tip">${IC.info}<span>还没有常用目录。可以添加，也可以直接使用「一键扫描」的整盘模式。</span></div>`}
@@ -2061,6 +2071,27 @@ document.addEventListener("click", async (ev) => {
         await addSkips(dirs);
       } else if (act === "settings-ext-reset") {
         st.cfg = await api.saveConfig({ exts: EXT_COMMON }); await refreshAll(); await render(); toast("已恢复默认扩展名", "ok");
+      } else if (act === "quick-menu") {
+        if (st.info && st.info.dev) { toast("开发模式下不写注册表，安装版可用", "info"); return; }
+        try {
+          const want = !(st.cfg && st.cfg.quick_menu !== false);
+          st.cfg = await api.saveConfig({ quick_menu: want });
+          const r = await api.quickMenu(want);
+          await render();
+          if (want && (!r || r.enabled === false)) toast("右键菜单写入失败，请检查安全软件", "error");
+          else toast(want ? "已加入资源管理器右键菜单" : "已从右键菜单移除", "ok");
+        } catch (err) {
+          toast(errMsg(err), "error", "设置失败");
+        }
+      } else if (act === "quick-notify") {
+        try {
+          const want = !(st.cfg && st.cfg.quick_notify !== false);
+          st.cfg = await api.saveConfig({ quick_notify: want });
+          await render();
+          toast(want ? "已开启系统通知" : "已关闭系统通知", "ok");
+        } catch (err) {
+          toast(errMsg(err), "error", "设置失败");
+        }
       } else if (act === "settings-auto") {
         if (st.info && st.info.dev) { toast("开发模式下不修改系统自启动项", "info"); return; }
         try {
@@ -2121,7 +2152,7 @@ document.addEventListener("click", async (ev) => {
   }
 });
 
-document.addEventListener("change", (ev) => {
+document.addEventListener("change", async (ev) => {
   const flt = ev.target.closest("[data-filter]");
   if (flt) {
     const k = flt.dataset.filter;
@@ -2130,6 +2161,17 @@ document.addEventListener("change", (ev) => {
     if (k === "provider") st.provider = flt.value || "";
     st.sel.clear();
     render();
+    return;
+  }
+  const qp = ev.target.closest("[data-quick-provider]");
+  if (qp) {
+    try {
+      st.cfg = await api.saveConfig({ quick_link_provider: qp.value || "" });
+      toast(qp.value ? "已指定快速链接使用的云存储" : "已改为自动选择", "ok");
+    } catch (err) {
+      toast(errMsg(err), "error");
+      await render();
+    }
     return;
   }
   const all = ev.target.closest("#sel-all");

@@ -22,6 +22,7 @@
 !macroend
 
 !macro customUnInstall
+  DeleteRegKey HKCU "Software\Classes\*\shell\StorageBearQuickLink"
   DeleteRegValue HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Run" "StorageBear"
   DeleteRegValue HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Run" "存储熊"
   DeleteRegValue HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "StorageBear"

@@ -800,7 +800,8 @@ def _handler(agent, user, pw, token=""):
                 u, p = base64.b64decode(got[6:]).decode("utf-8").split(":", 1)
             except Exception:
                 return False
-            return hmac.compare_digest(u, user) and hmac.compare_digest(p, pw)
+            return (hmac.compare_digest(u.encode("utf-8"), user.encode("utf-8")) and
+                    hmac.compare_digest(p.encode("utf-8"), pw.encode("utf-8")))
 
         def _token_ok(self):
             try:
@@ -814,10 +815,13 @@ def _handler(agent, user, pw, token=""):
         def _tokmatch(self, seg):
             if not token or not seg:
                 return False
-            if hmac.compare_digest(seg, token):
+            # compare_digest 只接受 ASCII 字符串；目录名可能是中文，必须用 bytes。
+            raw = seg.encode("utf-8", "ignore")
+            want = token.encode("utf-8")
+            if hmac.compare_digest(raw, want):
                 return True
             # Windows WebDAV 偶尔会在共享根最后一段后补一个句点。
-            return seg.endswith(".") and hmac.compare_digest(seg[:-1], token)
+            return seg.endswith(".") and hmac.compare_digest(raw[:-1], want)
 
         def _allow(self):
             self.tokpath = self._token_ok()
@@ -831,7 +835,7 @@ def _handler(agent, user, pw, token=""):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("DAV", "1, 2")
+            self.send_header("DAV", "1")
             self.send_header("MS-Author-Via", "DAV")
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
@@ -962,6 +966,54 @@ def _handler(agent, user, pw, token=""):
                 self.close_connection = True
             self._send(200, b"", extra={"Allow": "OPTIONS, GET, HEAD, PROPFIND"})
 
+        def do_PROPPATCH(self):
+            self._drain()
+            if not self._allow():
+                return self._deny()
+            parts = self._parts()
+            if parts is None:
+                return self._send(404)
+            row, kind, _ = self._at(parts)
+            if kind == "missing":
+                return self._send(404)
+            href = escape(self._href(parts, kind in ("root", "dir")))
+            body = ('<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">'
+                    '<D:response><D:href>%s</D:href><D:propstat><D:prop/>'
+                    '<D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>'
+                    '</D:multistatus>') % href
+            self._send(207, body.encode("utf-8"), 'application/xml; charset="utf-8"')
+
+        def _write_denied(self):
+            self._drain()
+            if not self._allow():
+                return self._deny()
+            self._send(405, b"StorageBear WebDAV is read-only",
+                       extra={"Allow": "OPTIONS, GET, HEAD, PROPFIND, PROPPATCH"})
+
+        def do_PUT(self):
+            self._write_denied()
+
+        def do_DELETE(self):
+            self._write_denied()
+
+        def do_MKCOL(self):
+            self._write_denied()
+
+        def do_MOVE(self):
+            self._write_denied()
+
+        def do_COPY(self):
+            self._write_denied()
+
+        def do_LOCK(self):
+            self._write_denied()
+
+        def do_UNLOCK(self):
+            self._write_denied()
+
+        def do_POST(self):
+            self._write_denied()
+
         def do_PROPFIND(self):
             self._drain()
             if not self._allow():
@@ -1044,7 +1096,7 @@ def _handler(agent, user, pw, token=""):
             self.send_header("Content-Length", str(size))
             self.send_header("Last-Modified", _date(mtime))
             self.send_header("ETag", '"%x-%x"' % (size, mtime))
-            self.send_header("DAV", "1, 2")
+            self.send_header("DAV", "1")
             self.end_headers()
 
         def do_GET(self):
@@ -1170,17 +1222,6 @@ def _handler(agent, user, pw, token=""):
                 except Exception:
                     pass
 
-        def _ro(self):
-            self._send(405, b"read-only")
-
-        do_PUT = _ro
-        do_DELETE = _ro
-        do_MKCOL = _ro
-        do_MOVE = _ro
-        do_COPY = _ro
-        do_PROPPATCH = _ro
-        do_LOCK = _ro
-        do_UNLOCK = _ro
 
     return H
 

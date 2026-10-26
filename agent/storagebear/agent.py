@@ -271,6 +271,24 @@ class Agent:
             return {"path": q}
         return self.jobs.add("fetch", fn)
 
+    def quicklink(self, path, provider_id=""):
+        if not str(path or "").strip():
+            raise RuntimeError("缺少文件路径")
+        p = util.native(path)
+        r = self.db.file(p)
+        if not os.path.isfile(p) and not (r and r.get("object_key")):
+            raise RuntimeError("文件不存在")
+        # 已有云端副本时直接复用，避免为了一个链接再上传一份。
+        if r and r.get("object_key") and r.get("provider_id") and ops._ok(self, r["provider_id"]):
+            pid = r["provider_id"]
+        else:
+            pid = provider_id or ops.pick_link(self)
+        res = ops.serve(self, {"kind": "upload", "payload": {"path": p, "provider_id": pid}})
+        prov = self.db.prov(res.get("provider_id") or "") or {}
+        return {"url": res.get("url") or "", "expires_at": int(res.get("expires_at") or 0),
+                "provider_id": res.get("provider_id") or "",
+                "provider_label": prov.get("label") or "", "name": os.path.basename(p)}
+
     def link(self, path):
         if not str(path or "").strip():
             raise RuntimeError("缺少文件路径")
@@ -386,7 +404,10 @@ class Agent:
                 "exts": c.get("exts") or scan.DEFAULT_EXT, "device_name": c.get("device_name"),
                 "device_id": c.get("device_id"), "drive_auto": bool(c.get("drive_auto")),
                 "drive_letter": c.get("drive_letter", ""), "last_scan": c.get("last_scan", 0),
-                "last_roots": c.get("last_roots") or [], "meta_error": c.get("meta_error", "")}
+                "last_roots": c.get("last_roots") or [], "meta_error": c.get("meta_error", ""),
+                "quick_link_provider": c.get("quick_link_provider") or "",
+                "quick_notify": bool(c.get("quick_notify", True)),
+                "quick_menu": bool(c.get("quick_menu", True))}
 
     def status(self):
         try:

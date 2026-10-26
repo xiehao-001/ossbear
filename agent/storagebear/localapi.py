@@ -276,6 +276,8 @@ def _handler(agent, token):
                 return 200, {"job_id": a.restore(data)}
             if method == "POST" and path == "/api/share":
                 return 200, {"job_id": a.share(data.get("path", ""), data.get("provider_id", ""))}
+            if method == "POST" and path == "/api/quick-link":
+                return 200, a.quicklink(data.get("path") or "", data.get("provider_id") or "")
             if method == "GET" and path == "/api/downloads":
                 return 200, a.downloads()
             if method == "POST" and path == "/api/link":
@@ -387,6 +389,12 @@ def _handler(agent, token):
                     kw["device_name"] = n
             if "drive_auto" in data:
                 kw["drive_auto"] = bool(data.get("drive_auto"))
+            if "quick_link_provider" in data:
+                kw["quick_link_provider"] = str(data.get("quick_link_provider") or "").strip()[:64]
+            if "quick_notify" in data:
+                kw["quick_notify"] = bool(data.get("quick_notify"))
+            if "quick_menu" in data:
+                kw["quick_menu"] = bool(data.get("quick_menu"))
             a.save(**kw)
             return a.pubcfg()
 

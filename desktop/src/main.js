@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, shell, clipboard, nativeImage } = require("electron");
+const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, shell, clipboard, nativeImage, Notification } = require("electron");
 const { spawn, execFileSync } = require("child_process");
 const fs = require("fs");
 const http = require("http");
@@ -9,6 +9,8 @@ try { ({ autoUpdater } = require("electron-updater")); } catch (_) {}
 const PUBLIC = (process.env.SB_PUBLIC_URL || "http://www.ai-xiehao.me").replace(/\/+$/, "");
 const DEV = !app.isPackaged;
 const HIDDEN = process.argv.includes("--hidden");
+const QUICK = quickArg(process.argv);
+const QUICK_KEY = "HKCU\\Software\\Classes\\*\\shell\\StorageBearQuickLink";
 const UPD = { owner: "xiehao-001", repo: "ossbear-releases" };
 const DATA = path.join(app.getPath("appData"), "StorageBear");
 app.setName("StorageBear");
@@ -70,6 +72,73 @@ function autoStartSet(on) {
   const state = autoStartGet();
   log("autostart set=" + !!on + " state=" + state);
   return state;
+}
+
+function quickArg(argv) {
+  const i = (argv || []).indexOf("--quick-link");
+  return i >= 0 && argv[i + 1] ? argv[i + 1] : "";
+}
+
+function quickMenuSet(on) {
+  if (process.platform !== "win32" || DEV) return false;
+  const run = (args) => execFileSync("reg", args, { stdio: "ignore", windowsHide: true, timeout: 8000 });
+  try {
+    if (!on) {
+      run(["delete", QUICK_KEY, "/f"]);
+      return false;
+    }
+    const exe = process.execPath;
+    const cmd = '"' + exe + '" --quick-link "%1"';
+    run(["add", QUICK_KEY, "/ve", "/d", "存储熊：快速创建链接", "/f"]);
+    run(["add", QUICK_KEY, "/v", "Icon", "/d", exe, "/f"]);
+    run(["add", QUICK_KEY, "/v", "MultiSelectModel", "/d", "Single", "/f"]);
+    run(["add", QUICK_KEY + "\\command", "/ve", "/d", cmd, "/f"]);
+    log("quick menu registered");
+    return true;
+  } catch (e) {
+    log("quick menu: " + e.message);
+    return false;
+  }
+}
+
+function notifyQuick(title, body) {
+  try {
+    if (Notification.isSupported()) {
+      const n = new Notification({
+        title: String(title || "存储熊"),
+        body: String(body || "").slice(0, 600),
+        icon: path.join(__dirname, "..", "assets", "icon.png"),
+      });
+      n.on("click", () => { if (win) { win.show(); win.focus(); } });
+      n.show();
+      return;
+    }
+  } catch (e) {
+    log("notify: " + e.message);
+  }
+  if (tray) {
+    try { tray.displayBalloon({ title: String(title || "存储熊"), content: String(body || "").slice(0, 600) }); } catch (_) {}
+  }
+}
+
+async function runQuickLink(file, standalone) {
+  let cfg = {};
+  try { cfg = await local("/api/config", "GET", undefined, 15000); } catch (_) {}
+  try {
+    if (!file) throw new Error("没有收到文件路径");
+    const r = await local("/api/quick-link", "POST", { path: file }, 3600000);
+    clipboard.writeText(r.url || "");
+    log("quick link: " + file + " -> " + (r.provider_label || r.provider_id || ""));
+    if (cfg.quick_notify !== false) {
+      notifyQuick("链接已复制", (r.name || path.basename(file)) + " · " + (r.provider_label || "云端") + "\n链接 6 天内有效，已写入剪贴板。");
+    }
+    if (standalone) setTimeout(() => { quitting = true; app.quit(); }, 1800);
+  } catch (e) {
+    log("quick link failed: " + e.message);
+    if (cfg.quick_notify !== false) notifyQuick("快速创建链接失败", e.message);
+    else dialog.showErrorBox("快速创建链接失败", e.message);
+    if (standalone) setTimeout(() => { quitting = true; app.quit(); }, 2500);
+  }
 }
 
 function runtimePath() {
@@ -526,18 +595,27 @@ function makeTray() {
   tray.on("double-click", () => { if (win) { win.show(); win.focus(); } });
 }
 
-const gotLock = app.requestSingleInstanceLock();
+const gotLock = app.requestSingleInstanceLock({ quick: QUICK });
 if (!gotLock) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.show();
-      win.focus();
+  app.on("second-instance", (event, argv, cwd, extra) => {
+    const target = (extra && extra.quick) || quickArg(argv);
+    if (target) {
+      runQuickLink(target, false);
+      return;
     }
+    if (!win) {
+      createWindow();
+      makeTray();
+      return;
+    }
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
   });
   app.whenReady().then(async () => {
+    if (process.platform === "win32") app.setAppUserModelId("com.storagebear.desktop");
     try {
       await backend();
     } catch (e) {
@@ -546,6 +624,14 @@ if (!gotLock) {
       app.quit();
       return;
     }
+    if (QUICK) {
+      await runQuickLink(QUICK, true);
+      return;
+    }
+    try {
+      const cfg = await local("/api/config", "GET", undefined, 10000);
+      quickMenuSet(cfg.quick_menu !== false);
+    } catch (_) {}
     createWindow();
     makeTray();
     setupUpdates();
@@ -614,6 +700,12 @@ ipcMain.handle("sb:open-external", async (e, url) => {
   if (!/^https?:\/\//i.test(String(url || ""))) throw new Error("只允许打开网页链接");
   await shell.openExternal(url);
   return true;
+});
+
+ipcMain.handle("sb:set-quick-menu", (event, on) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  return { enabled: quickMenuSet(!!on) };
 });
 
 ipcMain.handle("sb:copy", (e, text) => {

@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld("sb", {
   copy: (text) => ipcRenderer.invoke("sb:copy", text),
   openFolder: (kind) => ipcRenderer.invoke("sb:open-folder", kind),
   setAutoStart: (on) => ipcRenderer.invoke("sb:auto-start", on),
+  quickMenu: (on) => ipcRenderer.invoke("sb:set-quick-menu", on),
   onBackendExit: (fn) => ipcRenderer.on("sb:backend-exit", (e, code) => fn(code)),
   onFilesChanged: (fn) => ipcRenderer.on("sb:files-changed", () => fn()),
 });
