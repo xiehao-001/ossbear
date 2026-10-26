@@ -358,6 +358,7 @@ const calls = {
   getConfig: () => ({ route: "/api/config" }),
   saveConfig: (a) => ({ route: "/api/config", method: "POST", data: a }),
   browse: (a) => ({ route: "/api/browse" + qs({ path: a.path }) }),
+  apps: () => ({ route: "/api/apps" }),
   listProviders: () => ({ route: "/api/providers" }),
   saveProvider: (a) => ({ route: "/api/providers", method: "POST", data: a }),
   updateProvider: (a) => ({ route: "/api/providers/" + encodeURIComponent(a.id), method: "POST", data: a }),

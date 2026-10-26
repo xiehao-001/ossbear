@@ -409,7 +409,7 @@ def _neterr(out, err, code):
     low = text.lower()
     hit = re.search(r"(?:system error|系统错误)\s*[:：]?\s*(\d+)", text, re.I)
     hints = {
-        67: "Windows 无法创建 WebDAV 连接。请检查 MRxDAV 网络重定向器和 WebClient 服务；点「一键修复并重试」可自动检查。",
+        67: "Windows 拒绝创建 WebDAV 连接。本次已自动尝试本机账号和免密安全会话；若两种都失败，通常是 WebClient / MRxDAV 被系统策略、安全软件或代理设置拦截。可重启电脑后重试，并复制诊断查看每种方式的结果。",
         85: "盘符已被占用，请在「虚拟磁盘」页换一个盘符，或先卸载原来的网络盘。",
         1219: "该盘符已被其他账号连接。请先断开原有连接，再回到存储熊挂载。",
         1244: "当前登录账号无权映射网络驱动器。请用管理员账号安装并启动存储熊。",
@@ -437,6 +437,7 @@ class Drive:
         return {
             "user": c.get("drive_user") or "",
             "pass": c.get("drive_pass") or "",
+            "token": c.get("drive_token") or "",
             "port": int(c.get("drive_port") or 0),
             "letter": c.get("drive_letter") or "",
             "auto": bool(c.get("drive_auto", False)),
@@ -450,11 +451,13 @@ class Drive:
             if not c.get("drive_user") or not c.get("drive_pass"):
                 c["drive_user"] = "storagebear"
                 c["drive_pass"] = util.password(20)
-                util.save_json(util.path("config.json"), c)
+            if not c.get("drive_token"):
+                c["drive_token"] = secrets.token_urlsafe(18)
+            util.save_json(util.path("config.json"), c)
             user, pw = c["drive_user"], c["drive_pass"]
             port = int(c.get("drive_port") or 0)
             agent = self.agent
-            handler = _handler(agent, user, pw)
+            handler = _handler(agent, user, pw, c["drive_token"])
             try:
                 self.srv = _Server(("127.0.0.1", port), handler)
             except OSError:
@@ -664,31 +667,59 @@ class Drive:
                 letters.append(l)
         if not letters:
             raise RuntimeError("没有可用的盘符，请在「虚拟磁盘」页指定一个未被占用的盘符")
-        dests = [info["url"], "\\\\127.0.0.1@%d\\%s" % (self.port, DAV.strip("/"))]
+        tok = str(self._conf().get("token") or "")
+        url = info["url"]
+        url_local = url.replace("127.0.0.1", "localhost")
+        unc = "\\\\127.0.0.1@%d\\%s" % (self.port, DAV.strip("/"))
+        mounts = []
+        seen = set()
+
+        def add(dest, cred, label):
+            if dest and dest not in seen:
+                seen.add(dest)
+                mounts.append((dest, cred, label))
+
+        if tok:
+            anon = url.rstrip("/") + "/" + quote(tok, safe="")
+            add(anon, False, "本机安全会话")
+            add(anon.replace("127.0.0.1", "localhost"), False, "本机安全会话")
+            add(unc + "\\" + tok, False, "本机安全会话")
+        add(url, True, "本机账号")
+        add(url_local, True, "本机账号")
+        add(unc, True, "网络路径")
+
+        def clean_dest(s):
+            return (s or "").replace(tok, "***") if tok else (s or "")
+
         errs = []
-        for attempt in range(4):
+        for attempt in range(2):
             start_error = self._webclient()
             if start_error:
                 errs.append(start_error)
             self._clean()
             for letter in letters:
                 self._unmap(letter)
-                for dest in dests:
-                    code, out, err = util.popen(
-                        ["net", "use", letter + ":", dest, info["pass"], "/user:" + info["user"], "/persistent:no"],
-                        timeout=60)
+                for dest, cred, label in mounts:
+                    args = ["net", "use", letter + ":", dest]
+                    if cred:
+                        args.extend([info["pass"], "/user:" + info["user"]])
+                    args.append("/persistent:no")
+                    code, out, err = util.popen(args, timeout=60)
                     if code == 0:
                         c = util.config()
                         c["drive_letter"] = letter + ":"
                         util.save_json(util.path("config.json"), c)
                         self.agent.cfg = c
-                        util.log("dav: mounted %s -> %s" % (letter + ":", dest))
+                        util.log("dav: mounted %s -> %s (%s)" % (letter + ":", clean_dest(dest), label))
                         return self.info()
-                    msg = _neterr(out, err, code)
+                    msg = label + "：" + _neterr(out, err, code)
+                    if tok:
+                        msg = msg.replace(tok, "***")
                     errs.append(msg)
-                    util.log("dav: mount attempt %d %s %s -> %s" % (attempt + 1, letter + ":", dest, msg.replace("\n", " ")[:300]))
+                    util.log("dav: mount attempt %d %s %s (%s) -> %s" %
+                             (attempt + 1, letter + ":", clean_dest(dest), label, msg.replace("\n", " ")[:300]))
                     self._unmap(letter)
-            if attempt < 3:
+            if attempt < 1:
                 time.sleep(2.5)
         raise RuntimeError("\n\n".join(x for i, x in enumerate(errs) if x and x not in errs[:i]))
 
@@ -701,7 +732,7 @@ class Drive:
         return self.info()
 
 
-def _handler(agent, user, pw):
+def _handler(agent, user, pw, token=""):
     class H(http.server.BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = "StorageBearDAV/0.1"
@@ -718,6 +749,22 @@ def _handler(agent, user, pw):
             except Exception:
                 return False
             return hmac.compare_digest(u, user) and hmac.compare_digest(p, pw)
+
+        def _token_ok(self):
+            try:
+                path = unquote(urlsplit(self.path).path)
+                rest = path[len(DAV):].strip("/") if path.startswith(DAV + "/") else ""
+                first = rest.split("/", 1)[0]
+            except Exception:
+                return False
+            return bool(token and first) and hmac.compare_digest(first, token)
+
+        def _allow(self):
+            if self._auth():
+                self.anon = False
+                return True
+            self.anon = self._token_ok()
+            return self.anon
 
         def _send(self, code, body=b"", ctype="text/plain; charset=utf-8", extra=None):
             self.send_response(code)
@@ -752,6 +799,10 @@ def _handler(agent, user, pw):
             if not path.startswith(DAV):
                 return None
             rest = path[len(DAV):].strip("/")
+            if token and rest:
+                first, _, tail = rest.partition("/")
+                if hmac.compare_digest(first, token):
+                    rest = tail.strip("/")
             if not rest:
                 return []
             parts = rest.split("/")
@@ -789,9 +840,10 @@ def _handler(agent, user, pw):
             return None, "missing", None
 
         def _href(self, parts, is_dir):
-            h = DAV + "/" + "/".join(quote(x, safe="") for x in parts)
+            base = DAV + (("/" + token) if (token and getattr(self, "anon", False)) else "")
+            h = base + "/" + "/".join(quote(x, safe="") for x in parts)
             if not parts:
-                h = DAV + "/"
+                h = base + "/"
             if is_dir and not h.endswith("/"):
                 h += "/"
             return h
@@ -824,13 +876,13 @@ def _handler(agent, user, pw):
 
         def do_OPTIONS(self):
             self._drain()
-            if not self._auth():
+            if not self._allow():
                 return self._deny()
             self._send(200, b"", extra={"Allow": "OPTIONS, GET, HEAD, PROPFIND"})
 
         def do_PROPFIND(self):
             self._drain()
-            if not self._auth():
+            if not self._allow():
                 return self._deny()
             parts = self._parts()
             if parts is None:
@@ -885,7 +937,7 @@ def _handler(agent, user, pw):
 
         def do_HEAD(self):
             self._drain()
-            if not self._auth():
+            if not self._allow():
                 return self._deny()
             parts = self._parts()
             row, kind, _ = self._at(parts) if parts is not None else (None, "missing", None)
@@ -910,7 +962,7 @@ def _handler(agent, user, pw):
 
         def do_GET(self):
             self._drain()
-            if not self._auth():
+            if not self._allow():
                 return self._deny()
             parts = self._parts()
             row, kind, _ = self._at(parts) if parts is not None else (None, "missing", None)

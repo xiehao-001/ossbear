@@ -348,6 +348,7 @@ class Agent:
     def pubcfg(self):
         c = self.cfg
         return {"server": c.get("server", ""), "roots": c.get("roots") or [],
+                "skip_paths": c.get("skip_paths") or [],
                 "exts": c.get("exts") or scan.DEFAULT_EXT, "device_name": c.get("device_name"),
                 "device_id": c.get("device_id"), "drive_auto": bool(c.get("drive_auto")),
                 "drive_letter": c.get("drive_letter", ""), "last_scan": c.get("last_scan", 0),

@@ -60,8 +60,8 @@ const IC = {
 
 const st = {
   info: null, status: null, cfg: null, providers: [], stitches: [], devices: [],
-  view: "dashboard", path: "", parent: "", q: "", filter: "all", provider: "", sel: new Set(),
-  entries: [], recent: [], logs: [], logRemote: [], drive: null, pick: [], dl: [],
+  view: "dashboard", path: "", parent: "", q: "", filter: "all", status: "all", provider: "", sel: new Set(),
+  entries: [], recent: [], logs: [], logRemote: [], drive: null, pick: [], dl: [], apps: [],
   renderSeq: 0, poll: null, autoStart: false,
 };
 let codeTimer = null;
@@ -569,28 +569,41 @@ async function viewFiles() {
   let mode = "media";
   let data = { entries: [] };
   try {
-    if (st.q) { data = await api.files({ q: st.q, limit: 300 }); mode = "search"; }
+    if (st.q) { data = await api.files({ q: st.q, limit: 500 }); mode = "search"; }
     else if (st.path) { data = await api.files({ path: st.path }); mode = "browse"; }
     else {
-      data = await api.files({ kind: st.filter === "cloud" ? "cloud" : "media", provider_id: st.provider || "", limit: 300 });
+      data = await api.files({
+        kind: st.filter || "all", status: st.status === "all" ? "" : st.status,
+        provider_id: st.provider || "", limit: 500,
+      });
       mode = "media";
     }
   } catch (err) {
     return `<div class="view-inner">${banner()}<div class="alert alert-danger">${IC.warn}<div>${e(errMsg(err))}</div></div></div>`;
   }
   st.parent = data.parent || "";
-  let entries = data.entries || [];
-  if (mode === "media" && st.filter !== "cloud" && st.filter !== "all") entries = entries.filter((x) => x.kind === st.filter);
+  const match = (x) => {
+    if (x.is_dir) return true;
+    if (st.filter !== "all" && x.kind !== st.filter) return false;
+    if (st.status === "local" && (x.archived || x.has_cloud)) return false;
+    if (st.status === "cloud" && !x.archived) return false;
+    if (st.status === "both" && (!x.has_cloud || x.archived)) return false;
+    if (st.provider && x.provider_id !== st.provider) return false;
+    return true;
+  };
+  let entries = (data.entries || []).filter(match);
   st.entries = entries;
-  const filterChips = [["all", "全部媒体"], ["pdf", "PDF"], ["audio", "音乐"], ["video", "视频"], ["cloud", "云端副本"]];
-  const backBtns = (st.q || st.path) ? `<button class="btn btn-sm btn-ghost" data-act="files-reset">返回媒体库</button>` : "";
+  const types = [["all", "全部类型"], ["pdf", "PDF"], ["doc", "文档"], ["audio", "音乐"], ["video", "视频"], ["image", "图片"], ["archive", "压缩包"], ["other", "其他"]];
+  const states = [["all", "全部状态"], ["local", "仅本地"], ["cloud", "仅云端"], ["both", "本地 + 云"]];
+  const provOpts = [["", "全部云存储"]].concat(st.providers.map((p) => [p.id, p.label]));
+  const filtOn = st.filter !== "all" || st.status !== "all" || st.provider;
+  const backBtns = (st.q || st.path) ? `<button class="btn btn-sm btn-ghost" data-act="files-reset">返回文件库</button>` : "";
   const crumbs = st.path ? `<div class="breadcrumbs"><button data-act="files-reset">文件库</button>${IC.arrow.replace("<svg", '<svg style="width:12px;height:12px"')}<span>${e(st.path)}</span><button class="btn btn-sm btn-ghost" style="margin-left:auto" data-act="files-up">上一级</button></div>` : "";
   const selCount = st.sel.size;
   const pv = st.provider ? st.providers.find((p) => p.id === st.provider) : null;
-  const provTag = pv ? `<span class="tag amber">${e(pv.label)}</span><button class="btn btn-sm btn-ghost" data-act="provider-clear">查看全部云端</button>` : "";
   return `<div class="view-inner">
   ${banner()}
-  <div class="sec-head"><div><h3>${st.q ? "搜索结果" : st.path ? "磁盘目录" : "文件库"}</h3><p>${st.q ? `“${e(st.q)}” 的结果` : st.path ? e(st.path) : "索引中的 PDF、音频、视频，以及迁出到云端的副本。"}</p></div>
+  <div class="sec-head"><div><h3>${st.q ? "搜索结果" : st.path ? "磁盘目录" : "文件库"}</h3><p>${st.q ? `“${e(st.q)}”的结果` : st.path ? e(st.path) : "全部已索引文件；迁出后仍会保留在这里，并标记为仅云端。"}</p></div>
     <div class="row"><button class="btn btn-ghost" data-act="downloads-archives">${IC.upload} 下载目录压缩包</button><button class="btn btn-ghost" data-act="files-browse">${IC.folder} 浏览磁盘</button><button class="btn btn-primary" data-act="scan-modal">${IC.scan} 扫描</button></div></div>
   <div class="table-wrap">
     <div class="toolbar">
@@ -600,13 +613,20 @@ async function viewFiles() {
       </form>
       ${backBtns}
       <button class="btn btn-sm btn-ghost" data-act="files-root-pick">${IC.folder} 选择目录</button>
-      <div class="spacer"></div>
-      <div class="chips">${filterChips.map(([k, n]) => `<button class="chip ${st.filter === k && !st.q && !st.path ? "on" : ""}" data-act="filter" data-kind="${k}">${n}</button>`).join("")}</div>
     </div>
     ${crumbs}
-    ${pv ? `<div class="toolbar" style="border-top:0">${provTag}<span class="small faint">此云存储中的 ${entries.length} 个云端文件</span></div>` : ""}
-    <div id="selbar" class="selbar ${selCount ? "" : "hidden"}"><b><span data-cnt>${selCount}</span> 个文件已选择</b><div class="spacer"></div><button class="btn btn-sm btn-ghost" data-act="sel-clear">清除</button><button class="btn btn-sm btn-primary" data-act="${st.filter === "cloud" ? "sel-restore" : "sel-archive"}">${st.filter === "cloud" ? IC.download + " 迁回所选" : IC.upload + " 迁出所选"}</button></div>
-    ${entries.length ? `<table class="tbl"><thead><tr><th class="col-check"><input type="checkbox" class="check" id="sel-all" title="全选当前列表"></th><th>名称与位置</th><th class="col-size">大小</th><th class="col-badge">状态</th><th class="col-acts"></th></tr></thead><tbody>${entries.map(rowHtml).join("")}</tbody></table>` : emptyFiles(mode)}
+    <div class="toolbar" style="border-top:0">
+      <b class="small">筛选</b>
+      <select class="select" data-filter="kind" style="width:auto;min-width:104px" aria-label="文件类型">${types.map(([k, n]) => `<option value="${k}" ${st.filter === k ? "selected" : ""}>${n}</option>`).join("")}</select>
+      <select class="select" data-filter="status" style="width:auto;min-width:104px" aria-label="文件状态">${states.map(([k, n]) => `<option value="${k}" ${st.status === k ? "selected" : ""}>${n}</option>`).join("")}</select>
+      <select class="select" data-filter="provider" style="width:auto;min-width:116px" aria-label="云存储">${provOpts.map(([k, n]) => `<option value="${e(k)}" ${st.provider === k ? "selected" : ""}>${e(n)}</option>`).join("")}</select>
+      ${filtOn ? `<button class="btn btn-sm btn-ghost" data-act="files-filter-clear">清除筛选</button>` : ""}
+      <div class="spacer"></div>
+      <span class="tag">${entries.filter((x) => !x.is_dir).length} 个文件</span>
+      ${pv ? `<span class="tag amber">${e(pv.label)}</span>` : ""}
+    </div>
+    <div id="selbar" class="selbar ${selCount ? "" : "hidden"}"><b><span data-cnt>${selCount}</span> 个文件已选择</b><div class="spacer"></div><button class="btn btn-sm btn-ghost" data-act="sel-clear">清除</button><button class="btn btn-sm btn-primary" data-act="${st.status === "cloud" ? "sel-restore" : "sel-archive"}">${st.status === "cloud" ? IC.download + " 迁回所选" : IC.upload + " 迁出所选"}</button></div>
+    ${entries.length ? `<table class="tbl"><thead><tr><th class="col-check"><input type="checkbox" class="check" id="sel-all" title="全选当前列表"></th><th>名称与位置</th><th class="col-size">大小</th><th class="col-badge">状态</th><th class="col-acts"></th></tr></thead><tbody>${entries.map(rowHtml).join("")}</tbody></table>` : emptyFiles(mode, filtOn)}
   </div>
   <p class="small faint mt12">提示：扫描只收录设置中的扩展名，压缩包（zip / rar / 7z 等）会一并收录；目录不会被迁出，迁出目录时只处理其中的已索引文件。虚拟盘是只读镜像，不会改动原文件。</p>
 </div>`;
@@ -632,11 +652,11 @@ function rowHtml(x) {
     <td class="col-acts"><div class="acts">${acts}</div></td>
   </tr>`;
 }
-function emptyFiles(mode) {
+function emptyFiles(mode, filtOn) {
+  if (filtOn) return `<div class="empty"><div class="e-ic">${IC.scan}</div><b>没有符合筛选条件的文件</b><p>可以换一个类型、状态或云存储条件。</p><button class="btn btn-sm" data-act="files-filter-clear">清除筛选</button></div>`;
   if (mode === "search") return `<div class="empty"><div class="e-ic">${IC.scan}</div><b>没有找到匹配文件</b><p>试试更短的关键词，或扫描新的目录。</p><button class="btn btn-sm" data-act="files-reset">清空搜索</button></div>`;
-  if (mode === "browse") return `<div class="empty"><div class="e-ic">${IC.folder}</div><b>这里还没有索引记录</b><p>只显示已经扫描过的文件与目录。可以返回媒体库，或扫描包含此目录的位置。</p><button class="btn btn-sm" data-act="files-reset">返回媒体库</button></div>`;
-  if (st.filter === "cloud") return `<div class="empty"><div class="e-ic">${IC.cloud}</div><b>云端没有副本</b><p>在文件行中点击「迁出」，文件会上传到云存储并从本机移走。</p><button class="btn btn-sm" data-act="nav" data-view="cloud">查看云存储</button></div>`;
-  return `<div class="empty"><div class="e-ic">${IC.scan}</div><b>文件库是空的</b><p>先扫描包含 PDF、音乐或视频的目录。扫描不会上传文件。</p><button class="btn btn-primary" data-act="scan-modal">${IC.scan} 一键扫描</button></div>`;
+  if (mode === "browse") return `<div class="empty"><div class="e-ic">${IC.folder}</div><b>这里还没有索引记录</b><p>只显示已经扫描过的文件与目录。可以返回文件库，或扫描包含此目录的位置。</p><button class="btn btn-sm" data-act="files-reset">返回文件库</button></div>`;
+  return `<div class="empty"><div class="e-ic">${IC.scan}</div><b>文件库是空的</b><p>先扫描包含文档、PDF、音乐或视频的目录。扫描不会上传文件。</p><button class="btn btn-primary" data-act="scan-modal">${IC.scan} 一键扫描</button></div>`;
 }
 function syncSel() {
   const bar = $("#selbar");
@@ -1077,8 +1097,9 @@ async function submitDownloads(f, btn) {
     localStorage.setItem("sb.dest", dest);
     closeModalEl(f);
     track(r.job_id, "上传下载目录压缩包", { onDone: (job) => {
+      const rr = job.result || {};
       const er = jobErr(job);
-      if (er) toast("部分压缩包未完成：" + er, "error");
+      if (er) toast(`已迁出 ${Number(rr.files) || 0} 个压缩包；${er}`, "info", "上传完成，有清理提示");
       else toast("压缩包已上传到云端", "ok");
     } });
   } finally { buttonBusy(btn, false); }
@@ -1167,6 +1188,7 @@ function scanModal(opt) {
       </div>`;
   }
   const extHtml = allExt.map((x) => `<label class="chip" style="cursor:pointer"><input type="checkbox" name="ext" value="${e(x)}" ${extSet.has(x) ? "checked" : ""} style="margin-right:4px;accent-color:var(--amber-2)">${e(x)}</label>`).join("");
+  const skipCount = (cfg.skip_paths || []).length;
   return openModal({
     title: "一键扫描本机文件",
     sub: "扫描只建立索引，不会上传、移动或修改任何文件。压缩包会一并收录，暂不提供在线解压。",
@@ -1175,7 +1197,7 @@ function scanModal(opt) {
       ${scope}
       <div class="field"><label>收录的文件类型</label><div class="chips">${extHtml}</div></div>
       <div class="form-grid"><div class="field full"><label>补充扩展名 <small>空格或逗号分隔，可留空</small></label><input class="input" name="more" placeholder=".epub .aac .flac"></div></div>
-      <div class="alert alert-info">${IC.info}<div><b>全盘扫描会跳过系统目录与隐藏目录</b>，但文件很多时仍可能需要几分钟。你可以在任务卡中查看进度，扫描期间不影响其他操作。</div></div>
+      <div class="alert alert-info">${IC.info}<div><b>全盘扫描会跳过系统目录、隐藏目录${skipCount ? `和 ${skipCount} 个免扫路径` : ""}</b>，但文件很多时仍可能需要几分钟。你可以在任务卡中查看进度，扫描期间不影响其他操作。</div></div>
       <div class="form-note">扫描后文件会进入「文件库」，原路径保持不变。之后才能对目录或文件执行迁出；云端文件可通过 WebDAV 虚拟盘只读访问。</div>
     </form>`,
     foot: `<button class="btn btn-ghost" data-act="close-modal">取消</button><button class="btn btn-primary" type="submit" form="scanForm">${IC.scan} 开始扫描</button>`,
@@ -1285,6 +1307,7 @@ async function viewSettings() {
   const u = s.user || {};
   const cfg = st.cfg || {};
   const roots = (cfg.roots || []).map((r) => (typeof r === "string" ? { path: r, label: "" } : r));
+  const skips = (cfg.skip_paths || []).map((r) => (typeof r === "string" ? { path: r, label: "" } : r));
   const auto = !!info.autoStart;
   return `<div class="view-inner">
     ${banner()}
@@ -1311,7 +1334,9 @@ async function viewSettings() {
           <div class="card-title-row"><div><h3>扫描目录与扩展名</h3><p>扫描只索引，不上传文件。</p></div><button class="btn btn-sm btn-ghost" data-act="settings-root-add">${IC.plus} 添加目录</button></div>
           ${roots.length ? `<div style="margin-bottom:12px">${roots.map((r) => `<div class="root-item">${IC.folder}<span class="path" title="${e(r.path)}">${e(r.path)}</span><span class="tag">${e(r.label || "目录")}</span><button class="btn btn-sm btn-icon btn-ghost" title="移除" data-act="settings-root-del" data-path="${au(r.path)}">${IC.trash}</button></div>`).join("")}</div>` : `<div class="banner-tip">${IC.info}<span>还没有常用目录。可以添加，也可以直接使用「一键扫描」的整盘模式。</span></div>`}
           <form data-form="settings-ext"><div class="field"><label>收录的扩展名 <small>空格分隔</small></label><input class="input" name="exts" value="${e((cfg.exts || []).join(" "))}" placeholder=".pdf .mp3 .mp4"></div><div class="row"><button class="btn btn-sm" type="submit">保存扩展名</button><button class="btn btn-sm btn-ghost" type="button" data-act="settings-ext-reset">恢复默认</button></div></form>
-          <p class="tiny faint" style="margin:10px 0 0">移除常用目录不会删除已建立的文件索引，也不会改动本地文件。</p>
+          <div class="panel-head mt16"><div><h3>免扫路径</h3><p>扫描任何上级目录时，都会完全跳过这些路径下的文件与子目录。</p></div><div class="row"><button class="btn btn-sm btn-ghost" data-act="apps-exclude">${IC.scan} 从应用选择</button><button class="btn btn-sm btn-ghost" data-act="skip-add">${IC.plus} 添加路径</button></div></div>
+          ${skips.length ? `<div>${skips.map((r) => `<div class="root-item">${IC.shield}<span class="path" title="${e(r.path)}">${e(r.path)}</span><span class="tag amber">免扫</span><button class="btn btn-sm btn-icon btn-ghost" title="移除" data-act="skip-del" data-path="${au(r.path)}">${IC.trash}</button></div>`).join("")}</div>` : `<div class="banner-tip">${IC.info}<span>还没有免扫路径。可添加缓存、应用数据等不需要收录的位置。</span></div>`}
+          <p class="tiny faint" style="margin:10px 0 0">移除常用目录或免扫路径不会删除已建立的文件索引，也不会改动本地文件。</p>
         </div>
       </div>
       <div>
@@ -1395,7 +1420,11 @@ async function submitArchive(f, btn) {
     localStorage.setItem("sb.dest", dest);
     closeModalEl(f);
     st.sel.clear();
-    track(r.job_id, "迁出文件", { onDone: (job) => { const er = jobErr(job); if (er) toast("部分文件未完成：" + er, "error"); } });
+    track(r.job_id, "迁出文件", { onDone: (job) => {
+      const rr = job.result || {};
+      const er = jobErr(job);
+      if (er) toast(`已迁出 ${Number(rr.files) || 0} 个文件，另有清理提示：${er}`, "info", "迁出完成，有提示");
+    } });
   } finally { buttonBusy(btn, false); }
 }
 
@@ -1414,7 +1443,11 @@ async function submitRestore(f, btn) {
     const r = await api.restore(o);
     closeModalEl(f);
     if (o.paths) st.sel.clear();
-    track(r.job_id, "迁回文件", { onDone: (job) => { const er = jobErr(job); if (er) toast("部分文件未完成：" + er, "error"); } });
+    track(r.job_id, "迁回文件", { onDone: (job) => {
+      const rr = job.result || {};
+      const er = jobErr(job);
+      if (er) toast(`已迁回 ${Number(rr.files) || 0} 个文件；${er}`, "info", "迁回完成，有清理提示");
+    } });
   } finally { buttonBusy(btn, false); }
 }
 
@@ -1720,6 +1753,53 @@ async function delRoot(path) {
   toast("目录已移除，索引仍保留", "ok");
 }
 
+async function addSkips(paths) {
+  const cur = ((st.cfg && st.cfg.skip_paths) || []).map((r) => r.path || r);
+  const merged = Array.from(new Set(cur.concat(paths || []).filter(Boolean)));
+  st.cfg = await api.saveConfig({ skip_paths: merged });
+  await refreshAll();
+  await render();
+  toast("免扫路径已更新", "ok");
+}
+
+async function delSkip(path) {
+  if (!path) return;
+  const skips = ((st.cfg && st.cfg.skip_paths) || []).map((r) => r.path || r).filter((x) => x !== path);
+  st.cfg = await api.saveConfig({ skip_paths: skips });
+  await refreshAll();
+  await render();
+  toast("免扫路径已移除", "ok");
+}
+
+async function appsExcludeModal() {
+  const m = openModal({
+    title: "从应用选择免扫目录",
+    sub: "自动读取 Windows 已安装应用的位置；选中后，其安装目录及内部所有内容都不会被扫描。",
+    wide: true,
+    body: `<div id="apps-body"><div class="loading-block">${spinner()} 正在读取应用列表</div></div>`,
+    foot: `<button class="btn btn-ghost" data-act="close-modal">取消</button><button class="btn btn-ghost" data-act="apps-select-all">全选应用</button><button class="btn btn-primary" data-act="apps-add">加入免扫</button>`,
+  });
+  const box = m.root.querySelector("#apps-body");
+  let apps = [];
+  try { apps = (await api.apps()).apps || []; } catch (err) {
+    if (box) box.innerHTML = `<div class="alert alert-danger">${IC.warn}<div>${e(errMsg(err))}</div></div>`;
+    return;
+  }
+  st.apps = apps;
+  if (!box) return;
+  if (!apps.length) {
+    box.innerHTML = `<div class="empty" style="padding:24px 8px"><div class="e-ic">${IC.folder}</div><b>没有找到可加入的应用目录</b><p>当前系统或这套 Windows 安装没有提供应用位置。可以直接添加具体路径。</p><button class="btn btn-sm" data-act="skip-add">${IC.plus} 手动添加路径</button></div>`;
+    return;
+  }
+  box.innerHTML = `<div class="form-note">列表来自 Windows 卸载信息。选择应用会把它识别到的安装目录全部加入免扫；应用保存在其他位置的数据，请用「添加路径」单独选择。</div>
+    <div class="pick-list mt12" style="max-height:390px">${apps.map((a, i) => `<label class="pick-item" style="align-items:flex-start">
+      <input type="checkbox" name="app" value="${i}">
+      <span style="flex:1;min-width:0"><b>${e(a.name)}${a.version ? ` <span class="tag">${e(a.version)}</span>` : ""}</b>
+      <span class="tiny faint" style="display:block;margin-top:3px">${e(a.publisher || "未知发布者")}</span>
+      ${a.dirs.map((d) => `<span class="mono tiny faint" style="display:block;margin-top:3px;word-break:break-all">${e(d.path)}</span>`).join("")}</span>
+    </label>`).join("")}</div>`;
+}
+
 function showPhoneGuide() {
   openModal({
     title: "手机访问正在开发",
@@ -1745,7 +1825,7 @@ document.addEventListener("click", async (ev) => {
     try {
       if (act === "nav") {
         const v = el.dataset.view;
-        if (v === "files" && st.view !== "files") { st.q = ""; st.path = ""; st.provider = ""; st.filter = "all"; st.sel.clear(); }
+        if (v === "files" && st.view !== "files") { st.q = ""; st.path = ""; st.provider = ""; st.filter = "all"; st.status = "all"; st.sel.clear(); }
         setView(v);
       } else if (act === "auth-mode") {
         showAuth(el.dataset.mode === "register" ? "register" : "login");
@@ -1766,11 +1846,11 @@ document.addEventListener("click", async (ev) => {
       } else if (act === "files-browse" || act === "files-root-pick") {
         openBrowse(st.path || "");
       } else if (act === "files-reset") {
-        st.q = ""; st.path = ""; st.provider = ""; st.filter = "all"; st.sel.clear(); render();
+        st.q = ""; st.path = ""; st.provider = ""; st.filter = "all"; st.status = "all"; st.sel.clear(); render();
       } else if (act === "files-up") {
         st.path = st.parent || ""; st.q = ""; st.provider = ""; st.sel.clear(); render();
-      } else if (act === "filter") {
-        st.filter = el.dataset.kind || "all"; st.q = ""; st.path = ""; st.provider = ""; st.sel.clear(); render();
+      } else if (act === "files-filter-clear") {
+        st.provider = ""; st.filter = "all"; st.status = "all"; st.sel.clear(); render();
       } else if (act === "provider-clear") {
         st.provider = ""; render();
       } else if (act === "enter-dir") {
@@ -1853,7 +1933,7 @@ document.addEventListener("click", async (ev) => {
         if (!p.renew_url) { toast("还没有填写续费网址，可在编辑中补充", "info"); providerModal(p); return; }
         await api.openExternal(p.renew_url);
       } else if (act === "provider-files") {
-        st.provider = id; st.filter = "cloud"; st.q = ""; st.path = ""; st.sel.clear(); setView("files");
+        st.provider = id; st.filter = "all"; st.status = "cloud"; st.q = ""; st.path = ""; st.sel.clear(); setView("files");
       } else if (act === "provider-restore") {
         const p = st.providers.find((x) => x.id === id) || {};
         restoreModal({ provider_id: id, paths: [] });
@@ -1962,6 +2042,23 @@ document.addEventListener("click", async (ev) => {
         if (xs && xs.length) await addRoots(xs);
       } else if (act === "settings-root-del") {
         await delRoot(path);
+      } else if (act === "skip-add") {
+        const xs = await api.chooseDirs();
+        if (xs && xs.length) await addSkips(xs);
+      } else if (act === "skip-del") {
+        await delSkip(path);
+      } else if (act === "apps-exclude") {
+        await appsExcludeModal();
+      } else if (act === "apps-select-all") {
+        const box = el.closest(".overlay");
+        if (box) $$('input[name="app"]', box).forEach((x) => { x.checked = true; });
+      } else if (act === "apps-add") {
+        const box = el.closest(".overlay");
+        const picked = box ? $$('input[name="app"]:checked', box).map((x) => st.apps[Number(x.value)]).filter(Boolean) : [];
+        if (!picked.length) { toast("请至少选择一个应用", "error"); return; }
+        const dirs = picked.flatMap((a) => (a.dirs || []).map((d) => d.path));
+        closeModalEl(el);
+        await addSkips(dirs);
       } else if (act === "settings-ext-reset") {
         st.cfg = await api.saveConfig({ exts: EXT_COMMON }); await refreshAll(); await render(); toast("已恢复默认扩展名", "ok");
       } else if (act === "settings-auto") {
@@ -2025,6 +2122,16 @@ document.addEventListener("click", async (ev) => {
 });
 
 document.addEventListener("change", (ev) => {
+  const flt = ev.target.closest("[data-filter]");
+  if (flt) {
+    const k = flt.dataset.filter;
+    if (k === "kind") st.filter = flt.value || "all";
+    if (k === "status") st.status = flt.value || "all";
+    if (k === "provider") st.provider = flt.value || "";
+    st.sel.clear();
+    render();
+    return;
+  }
   const all = ev.target.closest("#sel-all");
   if (all) {
     st.entries.filter((x) => !x.is_dir).forEach((x) => { if (all.checked) st.sel.add(x.path); else st.sel.delete(x.path); });

@@ -21,6 +21,104 @@ def _label(p):
     return b or p
 
 
+def _skips(agent):
+    cfg = util.config()
+    out = []
+    for r in cfg.get("skip_paths") or []:
+        p = r.get("path") if isinstance(r, dict) else r
+        if p:
+            out.append(util.pkey(p))
+    return out
+
+
+def _blocked(path, skips):
+    p = util.pkey(path)
+    return any(p == r or p.startswith(r + os.sep) for r in skips)
+
+
+def _app_dir(raw):
+    s = os.path.expandvars(str(raw or "").strip())
+    if s.startswith('"'):
+        s = s[1:].split('"', 1)[0]
+    elif "," in s and s.rsplit(",", 1)[1].strip().isdigit():
+        s = s.rsplit(",", 1)[0]
+    s = s.strip().strip('"')
+    if not s:
+        return ""
+    if os.path.isfile(s):
+        s = os.path.dirname(s)
+    if not os.path.isdir(s):
+        return ""
+    p = util.native(s)
+    if os.path.dirname(p) == p:
+        return ""
+    root = util.pkey(os.environ.get("SystemRoot") or r"C:\Windows").rstrip("\\/")
+    if util.pkey(p) == root or util.pkey(p).startswith(root + os.sep):
+        return ""
+    broad = {util.pkey(os.environ.get("ProgramFiles") or r"C:\Program Files"),
+             util.pkey(os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)"),
+             util.pkey(os.environ.get("ProgramData") or r"C:\ProgramData"),
+             util.pkey(os.path.expanduser("~"))}
+    if util.pkey(p) in broad:
+        return ""
+    return p
+
+
+def apps():
+    if os.name != "nt":
+        return []
+    import winreg
+    roots = []
+    for hive, flag in ((winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+                       (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY),
+                       (winreg.HKEY_CURRENT_USER, winreg.KEY_WOW64_64KEY)):
+        roots.append((hive, r"Software\Microsoft\Windows\CurrentVersion\Uninstall", flag))
+    found = {}
+    for hive, key, flag in roots:
+        try:
+            parent = winreg.OpenKey(hive, key, 0, winreg.KEY_READ | flag)
+        except OSError:
+            continue
+        try:
+            total = winreg.QueryInfoKey(parent)[0]
+            for i in range(min(total, 1200)):
+                try:
+                    sub = winreg.OpenKey(parent, winreg.EnumKey(parent, i), 0, winreg.KEY_READ | flag)
+                except OSError:
+                    continue
+                try:
+                    def val(name):
+                        try:
+                            return winreg.QueryValueEx(sub, name)[0]
+                        except OSError:
+                            return ""
+                    name = str(val("DisplayName") or "").strip()
+                    if not name or val("SystemComponent") == 1 or val("ParentKeyName"):
+                        continue
+                    dirs = []
+                    for raw in (val("InstallLocation"), val("DisplayIcon"), val("UninstallString")):
+                        p = _app_dir(raw)
+                        if p and not _blocked(p, [util.pkey(x["path"]) for x in dirs]):
+                            dirs.append({"path": p, "label": os.path.basename(p) or name})
+                    if not dirs:
+                        continue
+                    ent = found.setdefault(util.pkey(name), {
+                        "name": name, "publisher": str(val("Publisher") or "")[:80],
+                        "version": str(val("DisplayVersion") or "")[:40], "dirs": []})
+                    seen = {util.pkey(x["path"]) for x in ent["dirs"]}
+                    for d in dirs:
+                        if util.pkey(d["path"]) not in seen:
+                            ent["dirs"].append(d)
+                            seen.add(util.pkey(d["path"]))
+                finally:
+                    sub.Close()
+        finally:
+            parent.Close()
+    out = [x for x in found.values() if x["dirs"]]
+    out.sort(key=lambda x: x["name"].lower())
+    return out[:250]
+
+
 def _top(roots):
     out = []
     for r in sorted(roots, key=lambda x: len(x["path"])):
@@ -71,6 +169,10 @@ def run(agent, job, opts):
     roots_ = roots(agent, full, opts.get("roots"))
     if not roots_:
         raise RuntimeError("没有可扫描的目录，请先添加目录")
+    skips = _skips(agent)
+    roots_ = [r for r in roots_ if not _blocked(r["path"], skips)]
+    if not roots_:
+        raise RuntimeError("所选目录都在免扫路径中，请先调整设置里的免扫路径")
     exts = _exts(agent, opts.get("exts"))
     sid = secrets.token_hex(12)
     remote_ok = bool(agent.api.token)
@@ -115,7 +217,14 @@ def run(agent, job, opts):
             try:
                 walker = os.walk(root, topdown=True, followlinks=False, onerror=lambda e: None)
                 for cur, dirs, files in walker:
-                    dirs[:] = [d for d in dirs if not _skip(d) and not os.path.islink(os.path.join(cur, d))]
+                    keep = []
+                    for d in dirs:
+                        p = os.path.normpath(os.path.join(cur, d))
+                        if _skip(d) or os.path.islink(p) or _blocked(p, skips):
+                            counts["skip"] += 1
+                            continue
+                        keep.append(d)
+                    dirs[:] = keep
                     for d in dirs:
                         p = os.path.normpath(os.path.join(cur, d))
                         try:
@@ -132,6 +241,9 @@ def run(agent, job, opts):
                             counts["skip"] += 1
                             continue
                         p = os.path.normpath(os.path.join(cur, fn))
+                        if _blocked(p, skips):
+                            counts["skip"] += 1
+                            continue
                         try:
                             st = os.stat(p)
                             if not os.path.isfile(p):

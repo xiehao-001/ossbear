@@ -296,11 +296,13 @@ def restore(agent, job, opts):
             s3 = clients[pid]
             if skip and os.path.isfile(p) and os.path.getsize(p) == int(e.get("size") or 0):
                 moved += 1
-                agent.db.cloud(p, pid, e["key"], "", 0, 0)
-                done += 1
-                job.up(progress=done, total=total)
-                continue
-            s3.download(e["key"], p)
+            else:
+                s3.download(e["key"], p)
+                try:
+                    os.utime(p, (int(e.get("mtime") or time.time()),) * 2)
+                except OSError:
+                    pass
+                moved += 1
             agent.db.cloud(p, pid, e["key"], "", 0, 0)
             _rcloud(agent, p, pid, e["key"], "", 0, False, errors)
             if not keep:
@@ -308,11 +310,9 @@ def restore(agent, job, opts):
                     s3.delete(e["key"])
                 except Exception as ex:
                     errors.append("%s: 已迁回但删除云端副本失败 %s" % (p, _err(ex)))
-            try:
-                os.utime(p, (int(e.get("mtime") or time.time()),) * 2)
-            except OSError:
-                pass
-            moved += 1
+                else:
+                    agent.db.cloud_clear(p)
+                    _rcloud(agent, p, "", "", "", 0, False, errors)
         except Exception as ex:
             errors.append("%s: %s" % (os.path.basename(p), _err(ex)))
         done += 1

@@ -177,6 +177,10 @@ CREATE TABLE IF NOT EXISTS stitches(
             self.x("UPDATE files SET provider_id=?,object_key=?,link=?,link_exp=?,archived=?,updated_at=? WHERE pkey=?",
                    (provider_id, object_key, link, int(link_exp), 1 if archived else 0, t, pkey(p)))
 
+    def cloud_clear(self, p):
+        self.x("UPDATE files SET provider_id='',object_key='',link='',link_exp=0,archived=0,updated_at=? "
+               "WHERE pkey=?", (now(), pkey(p)))
+
     def done_scan(self, sid):
         with self.lk:
             self.h.execute("DELETE FROM files WHERE scan_id<>? AND object_key=''", (sid,))
@@ -191,16 +195,35 @@ CREATE TABLE IF NOT EXISTS stitches(
                       "ORDER BY name COLLATE NOCASE LIMIT ?", (like, like, int(limit)))
 
     def media(self, limit=0, paths=None):
-        sql = "SELECT * FROM files WHERE is_dir=0 AND archived=0 AND kind IN ('pdf','audio','video')"
+        sql = "SELECT * FROM files WHERE is_dir=0 AND kind IN ('pdf','audio','video')"
         args = []
         if paths:
             marks = ",".join("?" for _ in paths)
             sql += " AND pkey IN (" + marks + ")"
             args = [pkey(x) for x in paths]
-        sql += " ORDER BY updated_at DESC"
+        sql += " ORDER BY archived DESC,updated_at DESC"
         if limit:
             sql += " LIMIT ?"
             args.append(int(limit))
+        return self.q(sql, args)
+
+    def find(self, kind="", status="", provider_id="", limit=500):
+        sql = "SELECT * FROM files WHERE is_dir=0"
+        args = []
+        if kind and kind != "all":
+            sql += " AND kind=?"
+            args.append(kind)
+        if status == "local":
+            sql += " AND archived=0 AND object_key=''"
+        elif status == "cloud":
+            sql += " AND archived=1"
+        elif status == "both":
+            sql += " AND archived=0 AND object_key<>''"
+        if provider_id:
+            sql += " AND provider_id=?"
+            args.append(provider_id)
+        sql += " ORDER BY archived DESC,updated_at DESC LIMIT ?"
+        args.append(max(1, min(1000, int(limit or 500))))
         return self.q(sql, args)
 
     def arch(self, provider_id=""):

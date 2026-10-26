@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("sb", {
   getConfig: () => call("getConfig"),
   saveConfig: (a) => call("saveConfig", a),
   browse: (path) => call("browse", { path }),
+  apps: () => call("apps"),
   providers: () => call("listProviders"),
   saveProvider: (a) => call("saveProvider", a),
   updateProvider: (a) => call("updateProvider", a),

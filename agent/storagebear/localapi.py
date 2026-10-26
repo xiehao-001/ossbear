@@ -205,6 +205,8 @@ def _handler(agent, token):
                     return 200, self._cfg(data)
             if path == "/api/browse":
                 return 200, self._browse(qs.get("path") or "")
+            if method == "GET" and path == "/api/apps":
+                return 200, {"apps": scan.apps()}
             if path == "/api/providers":
                 if method == "GET":
                     return 200, {"providers": _provs(a)}
@@ -345,6 +347,28 @@ def _handler(agent, token):
                     seen.add(k)
                     out.append({"path": p, "label": util.safe_name(label, 40) or os.path.basename(p) or p})
                 kw["roots"] = out
+            if "skip_paths" in data:
+                raw = data.get("skip_paths") or []
+                if not isinstance(raw, list) or len(raw) > 120:
+                    raise RuntimeError("免扫路径列表无效")
+                out = []
+                seen = set()
+                for r in raw:
+                    p = r.get("path") if isinstance(r, dict) else r
+                    label = r.get("label", "") if isinstance(r, dict) else ""
+                    if not p:
+                        continue
+                    p = util.native(p)
+                    if not os.path.exists(p):
+                        raise RuntimeError("免扫路径不存在：%s" % p)
+                    if os.path.dirname(p) == p:
+                        raise RuntimeError("不能把磁盘根目录设为免扫，请选择具体目录")
+                    k = util.pkey(p)
+                    if k in seen:
+                        continue
+                    seen.add(k)
+                    out.append({"path": p, "label": util.safe_name(label, 40) or os.path.basename(p) or p})
+                kw["skip_paths"] = out
             if "exts" in data:
                 xs = data.get("exts") or []
                 if not isinstance(xs, list):
@@ -434,7 +458,14 @@ def _handler(agent, token):
                         rows = rows[:min(1000, max(1, int(qs.get("limit"))))]
                     return {"kind": "cloud", "entries": [_entry(r, labels) for r in rows]}
                 paths = [x for x in (qs.get("paths") or "").split("|") if x] if qs.get("paths") else None
-                rows = a.db.media(min(1000, max(1, int(qs.get("limit") or 200))), paths)
+                if paths:
+                    rows = a.db.media(min(1000, max(1, int(qs.get("limit") or 500))), paths)
+                elif kind == "media":
+                    rows = a.db.media(min(1000, max(1, int(qs.get("limit") or 500))))
+                else:
+                    rows = a.db.find(kind=kind, status=qs.get("status") or "",
+                                     provider_id=qs.get("provider_id") or "",
+                                     limit=int(qs.get("limit") or 500))
                 return {"kind": kind, "entries": [_entry(r, labels) for r in rows]}
             roots = a.cfg.get("roots") or []
             return {"roots": roots, "entries": []}
