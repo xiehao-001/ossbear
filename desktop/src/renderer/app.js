@@ -1505,22 +1505,29 @@ async function doCopy(text, label) {
   try { await api.copy(String(text)); toast((label || "内容") + "已复制", "ok"); } catch (err) { toast(errMsg(err), "error"); }
 }
 
-const VIEWABLE = new Set([".pdf", ".html", ".htm", ".txt", ".md", ".json", ".xml", ".csv", ".log",
-  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".mp4", ".webm", ".mov", ".m4v",
-  ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"]);
 const OFFICE_VIEW = new Set([".docx", ".xlsx", ".pptx"]);
-const OFFICE_LEGACY = new Set([".doc", ".xls", ".ppt"]);
+const OFFICE_LEGACY = new Set([".doc", ".xls", ".ppt", ".wps", ".et", ".dps"]);
+const WPS_NATIVE = new Set([".wps", ".et", ".dps"]);
 const EXT_COMMON = [".pdf", ".mp3", ".mp4", ".m4a", ".wav", ".flac", ".mkv", ".avi", ".mov", ".webm",
-  ".docx", ".xlsx", ".pptx", ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst",
+  ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".wps", ".et", ".dps",
+  ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst",
   ".tgz", ".tbz2", ".txz", ".cab", ".iso"];
 
 function legacyOfficeHelp(path) {
+  const m = String(path || "").match(/\.[^./\\]+$/);
+  const ext = m ? m[0].toLowerCase() : "";
+  const wps = WPS_NATIVE.has(ext);
+  const title = wps ? "WPS 原生格式暂不支持预览" : "旧版 Office 格式暂不支持预览";
+  const sub = wps
+    ? `${e(ext)} 是 WPS 的原生格式，内置预览只支持 docx / xlsx / pptx。`
+    : "doc / xls / ppt 是旧版二进制格式，内置预览只支持 docx / xlsx / pptx。";
+  const target = wps ? "在 WPS 中另存为" : "在 Office 或 WPS 中另存为";
   openModal({
-    title: "旧版 Office 格式暂不支持预览",
-    sub: "doc / xls / ppt 是旧版二进制格式，本地预览组件只支持 docx / xlsx / pptx。",
-    body: `<p class="confirm-text">可以交给本机安装的 Microsoft Office 或 WPS 打开。云端文件会先下载到存储熊的临时目录，不会改动云端副本。</p>
-      <div class="form-note">提示：如果希望以后能直接预览，可以在 Office 中另存为 docx / xlsx / pptx。</div>`,
-    foot: `<button class="btn btn-ghost" data-close>取消</button><button class="btn btn-primary" data-act="legacy-open" data-path="${au(path)}">用本机 Office 打开</button>`,
+    title,
+    sub,
+    body: `<p class="confirm-text">系统会调用本机默认的 Microsoft Office 或 WPS 打开。云端文件只会下载到临时目录，<b>修改临时副本不会自动回传</b>；如需修改原件，请先迁回或另存为新格式。</p>
+      <div class="form-note">提示：如果希望以后能直接预览和编辑回传，请${target} docx / xlsx / pptx。</div>`,
+    foot: `<button class="btn btn-ghost" data-close>取消</button><button class="btn btn-primary" data-act="legacy-open" data-path="${au(path)}">用本机 Office / WPS 打开</button>`,
   });
 }
 
@@ -1536,29 +1543,10 @@ async function doOpenEntry(path) {
     legacyOfficeHelp(path);
     return;
   }
-  if (VIEWABLE.has(ext)) {
-    try {
-      const r = await api.link(path);
-      if (r && r.mode === "url" && r.url) {
-        await api.openExternal(r.url);
-        toast("已在浏览器中打开，直接读取云端文件，不会下载到本机", "ok");
-        return;
-      }
-      if (r && r.mode === "local") {
-        const j = await api.open(path);
-        track(j.job_id, "打开文件", { refresh: false });
-        return;
-      }
-      throw new Error("没有取得可打开的链接");
-    } catch (err) {
-      toast(errMsg(err), "error", "打开失败");
-      return;
-    }
-  }
   try {
     const r = await api.open(path);
     track(r.job_id, "打开文件", { refresh: false });
-  } catch (err) { toast(errMsg(err), "error"); }
+  } catch (err) { toast(errMsg(err), "error", "打开失败"); }
 }
 
 async function doFetch(path) {
@@ -1597,7 +1585,7 @@ function mountHelp(err) {
     body: `<p class="confirm-text">${e(errMsg(err))}</p>
       <ol class="mount-steps mt12">
         <li>点下方「一键修复并重试」。Windows 弹出管理员授权时选择「是」，修复完成后会自动再挂载一次。</li>
-        <li>修复会自动启用 WebDAV 客户端、设置 HTTP 基本认证、把 WebClient 改为自动启动并重新启动它，不会改动你的文件。</li>
+        <li>修复会启动 MRxDAV 网络重定向器和 WebClient、设置 HTTP 基本认证并重新启动服务，不会改动你的文件。</li>
         <li>如果提示需要重启电脑，请重启后再点「挂载为网络盘」；仍失败可以换一个盘符（如 Z）。</li>
       </ol>
       <div class="form-note mt12">公司电脑的组策略或安全软件可能禁止 WebDAV，这种情况需要管理员放行。挂载只在本机 127.0.0.1 进行，不会把文件或密钥暴露到局域网。</div>`,
@@ -1659,7 +1647,7 @@ async function repairDrive() {
   const m = openModal({
     title: "正在一键修复 WebDAV",
     sub: "Windows 会弹出一次管理员授权窗口，请点击「是」。没看到时请检查任务栏。",
-    body: `<div class="row" style="align-items:center;gap:10px">${spinner()}<b>正在启用 WebDAV 客户端并重启 WebClient 服务…</b></div>
+    body: `<div class="row" style="align-items:center;gap:10px">${spinner()}<b>正在启动 MRxDAV 和 WebClient，并重新连接网络盘…</b></div>
       <div class="form-note mt16">通常需要十几秒，请不要关闭存储熊。修复完成后会自动重新挂载；若系统提示需要重启，请重启电脑后再挂载。</div>`,
   });
   let r;
@@ -1792,7 +1780,7 @@ document.addEventListener("click", async (ev) => {
       } else if (act === "legacy-open") {
         closeModalEl(el);
         const r = await api.open(path);
-        track(r.job_id, "用本机 Office 打开", { refresh: false });
+        track(r.job_id, "用本机 Office / WPS 打开", { refresh: false });
       } else if (act === "fetch-entry") {
         await doFetch(path);
       } else if (act === "share-entry") {

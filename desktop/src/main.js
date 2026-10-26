@@ -376,9 +376,9 @@ const calls = {
   share: (a) => ({ route: "/api/share", method: "POST", data: a }),
   downloads: () => ({ route: "/api/downloads" }),
   link: (a) => ({ route: "/api/link", method: "POST", data: a }),
-  preview: (a) => ({ route: "/api/preview", method: "POST", data: a, timeout: 180000 }),
-  edit: (a) => ({ route: "/api/edit", method: "POST", data: a, timeout: 300000 }),
-  saveEdit: (a) => ({ route: "/api/save-edit", method: "POST", data: a, timeout: 300000 }),
+  preview: (a) => ({ route: "/api/preview", method: "POST", data: a, timeout: 1800000 }),
+  edit: (a) => ({ route: "/api/edit", method: "POST", data: a, timeout: 1800000 }),
+  saveEdit: (a) => ({ route: "/api/save-edit", method: "POST", data: a, timeout: 1800000 }),
   open: (a) => ({ route: "/api/open", method: "POST", data: a }),
   fetch: (a) => ({ route: "/api/fetch", method: "POST", data: a }),
   reveal: (a) => ({ route: "/api/reveal", method: "POST", data: a }),
@@ -643,17 +643,30 @@ ipcMain.handle("sb:preview-open", (event, file) => {
 
 ipcMain.handle("sb:preview-data", async (event, file) => {
   if (!fromPreview(event)) throw new Error("拒绝非法调用");
-  return local("/api/preview", "POST", { path: String(file || "").slice(0, 4096) }, 180000);
+  const r = await local("/api/preview", "POST", { path: String(file || "").slice(0, 4096) }, 1800000);
+  const q = String(r.file || "");
+  if (!q) throw new Error("本地代理没有返回预览文件");
+  let buf;
+  try {
+    buf = await fs.promises.readFile(q);
+  } catch (e) {
+    throw new Error("读取本机副本失败：" + e.message);
+  }
+  delete r.file;
+  r.data = buf.byteOffset === 0 && buf.byteLength === buf.buffer.byteLength
+    ? buf.buffer
+    : buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  return r;
 });
 
 ipcMain.handle("sb:preview-edit", async (event, file) => {
   if (!fromPreview(event)) throw new Error("拒绝非法调用");
-  return local("/api/edit", "POST", { path: String(file || "").slice(0, 4096) }, 300000);
+  return local("/api/edit", "POST", { path: String(file || "").slice(0, 4096) }, 1800000);
 });
 
 ipcMain.handle("sb:preview-save", async (event, file) => {
   if (!fromPreview(event)) throw new Error("拒绝非法调用");
-  const r = await local("/api/save-edit", "POST", { path: String(file || "").slice(0, 4096) }, 300000);
+  const r = await local("/api/save-edit", "POST", { path: String(file || "").slice(0, 4096) }, 1800000);
   if (r && r.changed && win && !win.isDestroyed()) win.webContents.send("sb:files-changed");
   return r;
 });

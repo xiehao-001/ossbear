@@ -14,7 +14,9 @@ from . import VERSION
 APP = "StorageBear"
 ARCHIVE_EXT = [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst",
                ".tgz", ".tbz2", ".txz", ".cab", ".iso"]
-OFFICE_EXT = [".docx", ".xlsx", ".pptx"]
+OFFICE_VIEW = [".docx", ".xlsx", ".pptx"]
+OFFICE_LOCAL = [".doc", ".xls", ".ppt", ".wps", ".et", ".dps"]
+OFFICE_EXT = OFFICE_VIEW + OFFICE_LOCAL
 _lock = threading.Lock()
 
 
@@ -132,7 +134,7 @@ def kind(e):
         return "video"
     if e in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic"):
         return "image"
-    if e in (".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".json", ".csv"):
+    if e in OFFICE_EXT or e in (".txt", ".md", ".json", ".csv"):
         return "doc"
     if e in ARCHIVE_EXT:
         return "archive"
@@ -148,12 +150,15 @@ def fmt_size(n):
 
 
 def openpath(p):
-    if os.name == "nt":
-        os.startfile(p)
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", p])
-    else:
-        subprocess.Popen(["xdg-open", p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        if os.name == "nt":
+            os.startfile(p)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", p])
+        else:
+            subprocess.Popen(["xdg-open", p], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        raise RuntimeError("系统中没有可打开该文件的应用，请设置默认应用或安装支持该格式的软件")
 
 
 def _text(raw):

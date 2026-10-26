@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import json
 import mimetypes
@@ -12,10 +11,8 @@ from .s3 import S3, S3Error
 
 LINK_TTL = 6 * 86400
 MANIFEST = "_storagebear/logs/%s.jsonl"
-VIEW_MAX = 40 * 1024 * 1024
-EDIT_MAX = 200 * 1024 * 1024
-VIEW_EXT = {".docx", ".xlsx", ".pptx"}
-LEGACY_EXT = {".doc", ".xls", ".ppt"}
+VIEW_EXT = set(util.OFFICE_VIEW)
+LOCAL_EXT = set(util.OFFICE_LOCAL)
 
 
 def _err(e):
@@ -426,8 +423,8 @@ def openable(agent, path):
 
 def _view_ext(path):
     ext = util.ext(path)
-    if ext in LEGACY_EXT:
-        raise RuntimeError("旧版 Office 格式（doc / xls / ppt）暂不支持预览，请用本机 Office 打开")
+    if ext in LOCAL_EXT:
+        raise RuntimeError("%s 暂不支持内置预览，请用本机 Office 或 WPS 打开" % ext)
     if ext not in VIEW_EXT:
         raise RuntimeError("该格式暂不支持预览")
     return ext
@@ -465,41 +462,16 @@ def _edit_state(path):
 def preview(agent, path):
     p = util.native(path)
     ext = _view_ext(p)
-    r = agent.db.file(p)
+    r = agent.db.file(p) or {}
     local = os.path.isfile(p)
-    cloud = bool(r and r.get("object_key") and _ok(agent, r.get("provider_id")))
-    if local:
-        size = os.path.getsize(p)
-        if size > VIEW_MAX:
-            raise RuntimeError("文件约 %s，超过 40MB 预览上限；可改用本机 Office 打开" % util.fmt_size(size))
-        with open(p, "rb") as f:
-            raw = f.read()
-        source = "local"
-        pid = (r or {}).get("provider_id") or ""
-        key = (r or {}).get("object_key") or ""
-    elif cloud:
-        s3 = _s3(agent, r["provider_id"])
-        size = int(r.get("size") or 0)
-        try:
-            hd = s3.head(r["object_key"])
-            size = int(hd.get("Content-Length") or hd.get("content-length") or size)
-        except Exception:
-            pass
-        if size > VIEW_MAX:
-            raise RuntimeError("文件约 %s，超过 40MB 预览上限；可改用本机 Office 打开" % util.fmt_size(size))
-        raw = s3.get_bytes(r["object_key"], VIEW_MAX + 1)
-        if len(raw) > VIEW_MAX:
-            raise RuntimeError("文件超过 40MB 预览上限；可改用本机 Office 打开")
-        size = len(raw)
-        source = "cloud"
-        pid = r["provider_id"]
-        key = r["object_key"]
-    else:
-        raise RuntimeError("本地与云端都没有该文件")
-    return {"name": os.path.basename(p), "path": p, "ext": ext, "size": int(size),
-            "size_h": util.fmt_size(size), "source": source, "provider_id": pid,
+    q = openable(agent, p)
+    size = os.path.getsize(q)
+    pid = r.get("provider_id") or ""
+    return {"name": os.path.basename(p), "path": p, "file": q, "ext": ext, "size": size,
+            "size_h": util.fmt_size(size), "source": "local" if local else "cloud",
+            "provider_id": pid,
             "provider_label": (agent.db.prov(pid) or {}).get("label") or "" if pid else "",
-            "has_cloud": bool(key), "data": base64.b64encode(raw).decode("ascii")}
+            "has_cloud": bool(r.get("object_key"))}
 
 
 def editfile(agent, path):
@@ -512,16 +484,7 @@ def editfile(agent, path):
         work = p
         source = "local"
     elif r.get("object_key") and _ok(agent, r.get("provider_id")):
-        s3 = _s3(agent, r["provider_id"])
-        size = int(r.get("size") or 0)
-        try:
-            hd = s3.head(r["object_key"])
-            size = int(hd.get("Content-Length") or hd.get("content-length") or size)
-        except Exception:
-            pass
-        if size > EDIT_MAX:
-            raise RuntimeError("文件约 %s，超过 200MB 本机编辑上限" % util.fmt_size(size))
-        s3.download(r["object_key"], work)
+        _s3(agent, r["provider_id"]).download(r["object_key"], work)
         source = "cloud"
     else:
         raise RuntimeError("本地与云端都没有该文件")
@@ -550,14 +513,14 @@ def saveedit(agent, path):
     d, h, stp = _edit_state(p)
     snap = util.load_json(stp, None)
     if not snap or util.pkey(snap.get("orig") or "") != util.pkey(p):
-        raise RuntimeError("没有找到编辑记录，请先从预览窗口点击「用本机 Office 编辑」")
+        raise RuntimeError("没有找到编辑记录，请先从预览窗口点击「用本机 Office / WPS 编辑」")
     work = util.native(snap.get("work") or "")
     if not os.path.isfile(work):
         raise RuntimeError("编辑临时文件已不存在，请重新打开")
     digest = _sha(work)
     if digest == snap.get("sha1"):
         return {"changed": False, "uploaded": False, "path": p,
-                "message": "未检测到修改。请在本机 Office 中保存文件后再点「完成并上传」。"}
+                "message": "未检测到修改。请在本机 Office / WPS 中保存文件后再点「完成并上传」。"}
     size = os.path.getsize(work)
     if size <= 0:
         raise RuntimeError("文件内容为空，已取消上传")

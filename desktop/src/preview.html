@@ -16,15 +16,15 @@
     </div>
     <div class="acts">
       <span class="badge hidden" id="badge"></span>
-      <button class="btn ghost" id="edit" disabled>用本机 Office 编辑</button>
+      <button class="btn ghost" id="edit" title="交给系统默认的 Office 或 WPS 打开" disabled>用本机 Office / WPS 编辑</button>
       <button class="btn primary hidden" id="save">完成并上传</button>
       <button class="btn ghost" id="close">关闭</button>
     </div>
   </header>
   <div class="tips" id="tips">
-    <span>预览在本机完成，不会产生“本地 + 云”副本。</span>
+    <span>预览与渲染都在本机完成；云端文件使用临时副本，不写入原路径。</span>
     <span class="dot"></span>
-    <span>编辑后上传新对象，再删除旧对象；上传失败时旧对象保留。</span>
+    <span>编辑交给系统默认的 Office 或 WPS；上传新对象成功后再删除旧对象。</span>
   </div>
   <main id="stage">
     <div class="splash" id="splash">

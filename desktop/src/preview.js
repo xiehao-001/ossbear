@@ -41,7 +41,7 @@
     splashActs.innerHTML = "";
     splash.classList.remove("hidden", "error");
     splashTitle.textContent = "正在读取文件…";
-    splashText.textContent = "大文件可能需要几秒钟";
+    splashText.textContent = "云端文件会先取回本机，大文件可能需要一段时间";
   }
 
   function showError(text, allowEdit) {
@@ -53,7 +53,7 @@
     if (allowEdit) {
       const b = document.createElement("button");
       b.className = "btn primary";
-      b.textContent = "用本机 Office 编辑";
+      b.textContent = "用本机 Office / WPS 编辑";
       b.addEventListener("click", doEdit);
       splashActs.appendChild(b);
     }
@@ -69,11 +69,10 @@
     host.classList.remove("hidden");
   }
 
-  function bytesOf(b64) {
-    const bin = atob(b64);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
-    return out;
+  function bytesOf(data) {
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    throw new Error("预览数据格式异常，请重新打开");
   }
 
   function updateMeta() {
@@ -159,7 +158,7 @@
     if (cut) {
       const note = document.createElement("div");
       note.className = "sheet-note";
-      note.textContent = "表格较大，预览只显示前 " + maxRows + " 行、前 " + maxCols + " 列；完整内容请用本机 Office 打开。";
+      note.textContent = "表格较大，预览只显示前 " + maxRows + " 行、前 " + maxCols + " 列；完整内容请用本机 Office / WPS 打开。";
       box.appendChild(note);
     }
     return box;
@@ -224,10 +223,8 @@
       if (seq !== state.seq) return;
       state.meta = r;
       updateMeta();
-      let raw = r.data;
-      r.data = "";
-      const bytes = bytesOf(raw);
-      raw = "";
+      const bytes = bytesOf(r.data);
+      r.data = null;
       if (r.ext === ".docx") await renderDocx(bytes);
       else if (r.ext === ".xlsx") renderXlsx(bytes);
       else if (r.ext === ".pptx") await renderPptx(bytes);
@@ -254,14 +251,14 @@
       saveBtn.textContent = state.meta && !state.meta.has_cloud && state.meta.source === "local" ? "完成" : "完成并上传";
       saveBtn.classList.remove("hidden");
       toast(r.source === "cloud"
-        ? "已用本机 Office 打开临时副本。保存后回来点「完成并上传」。"
-        : "已用本机 Office 打开。保存后回来点「" + (state.meta && !state.meta.has_cloud ? "完成" : "完成并上传") + "」。", "ok");
+        ? "已交给本机 Office / WPS 打开临时副本。保存后回来点「完成并上传」。"
+        : "已交给本机 Office / WPS 打开。保存后回来点「" + (state.meta && !state.meta.has_cloud ? "完成" : "完成并上传") + "」。", "ok");
     } catch (e) {
       toast("打开失败：" + msgOf(e), "err");
     } finally {
       state.busy = false;
       editBtn.classList.remove("busy");
-      editBtn.textContent = old || "用本机 Office 编辑";
+      editBtn.textContent = old || "用本机 Office / WPS 编辑";
       editBtn.disabled = !state.path;
     }
   }
@@ -276,7 +273,7 @@
       const r = await bear.save(state.path);
       if (!r.changed) {
         const word = state.meta && !state.meta.has_cloud && state.meta.source === "local" ? "完成" : "完成并上传";
-        toast("未检测到修改。请先在本机 Office 中保存文件，再点「" + word + "」。");
+        toast("未检测到修改。请先在本机 Office / WPS 中保存文件，再点「" + word + "」。");
         return;
       }
       if (r.uploaded) {

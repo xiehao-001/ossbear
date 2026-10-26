@@ -76,8 +76,9 @@ def _win_verify():
     root = os.environ.get("SystemRoot") or r"C:\Windows"
     sc = os.path.join(root, "System32", "sc.exe")
     rg = os.path.join(root, "System32", "reg.exe")
-    v = {"service": "", "start": "", "basic": 0, "ok": False}
+    v = {"service": "", "start": "", "basic": 0, "mrxdav": "", "ok": False}
     v["service"] = _svc_state(sc) or "UNKNOWN"
+    v["mrxdav"] = _svc_state(sc, "MRxDAV") or "UNKNOWN"
     try:
         _, o, e = util.popen([sc, "qc", "WebClient"], timeout=15)
         t = (o + e).upper()
@@ -96,7 +97,8 @@ def _win_verify():
             v["basic"] = int(m.group(1), 16)
     except Exception:
         pass
-    v["ok"] = v["service"] == "RUNNING" and v["start"] == "AUTO_START" and v["basic"] == 2
+    v["ok"] = (v["service"] == "RUNNING" and v["mrxdav"] == "RUNNING"
+               and v["start"] == "AUTO_START" and v["basic"] == 2)
     return v
 
 
@@ -191,13 +193,16 @@ def _repair_msg(res, v, logf, code):
     state = []
     if res:
         if res.get("service"):
-            state.append("服务 " + str(res.get("service")))
+            state.append("WebClient " + str(res.get("service")))
+        if res.get("mrxdav"):
+            state.append("MRxDAV " + str(res.get("mrxdav")))
         if res.get("start"):
             state.append("启动类型 " + str(res.get("start")))
         if res.get("basic"):
             state.append("BasicAuthLevel " + str(res.get("basic")))
     elif v:
-        state.append("服务 " + str(v.get("service") or "未知"))
+        state.append("WebClient " + str(v.get("service") or "未知"))
+        state.append("MRxDAV " + str(v.get("mrxdav") or "未知"))
         state.append("启动类型 " + str(v.get("start") or "未知"))
         state.append("BasicAuthLevel " + str(v.get("basic") or 0))
     if state:
@@ -240,26 +245,30 @@ def repair_child(directory="", out=""):
     sc = os.path.join(root, "System32", "sc.exe")
     key = r"HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters"
     add("repair begin dir=%s" % d)
-    try:
-        code, o, e = util.popen([dism, "/Online", "/Enable-Feature",
-                                 "/FeatureName:FS-WebDAV-Redirector", "/All", "/NoRestart"], timeout=240)
-        txt = (o + "\n" + e).strip()
-        add("dism exit=%s %s" % (code, txt[-700:]))
-        if code == 0:
-            res["feature"] = "Enabled"
-        elif code == 3010:
-            res["feature"] = "EnablePending"
-            res["restart"] = True
-        else:
-            err("启用 WebDAV 组件失败（DISM 退出码 %s）" % code)
-    except Exception as ex:
-        err("启用 WebDAV 组件失败：%s" % ex)
+    if sys.getwindowsversion().product_type == 1:
+        res["feature"] = "BuiltIn"
+        add("Windows client uses the built-in MRxDAV driver; DISM feature check skipped")
+    else:
+        try:
+            code, o, e = util.popen([dism, "/Online", "/Enable-Feature",
+                                     "/FeatureName:FS-WebDAV-Redirector", "/All", "/NoRestart"], timeout=240)
+            txt = (o + "\n" + e).strip()
+            add("dism exit=%s %s" % (code, txt[-700:]))
+            if code == 0:
+                res["feature"] = "Enabled"
+            elif code == 3010:
+                res["feature"] = "EnablePending"
+                res["restart"] = True
+            else:
+                err("启用 WebDAV 组件失败（DISM 退出码 %s）：%s" % (code, txt[-500:]))
+        except Exception as ex:
+            err("启用 WebDAV 组件失败：%s" % ex)
 
     for name, val in (("BasicAuthLevel", "2"), ("FileSizeLimitInBytes", "4294967295")):
         try:
             code, o, e = util.popen([rg, "add", key, "/v", name, "/t", "REG_DWORD", "/d", val, "/f"], timeout=30)
             if code != 0:
-                err("写入 %s 失败（退出码 %s）" % (name, code))
+                err("写入 %s 失败（退出码 %s）：%s" % (name, code, (o + "\n" + e).strip()[-500:]))
         except Exception as ex:
             err("写入 %s 失败：%s" % (name, ex))
     try:
@@ -270,15 +279,20 @@ def repair_child(directory="", out=""):
         pass
     add("basic auth level=%s" % res["basic"])
 
+    for svc, mode in (("MRxDAV", "demand"), ("WebClient", "auto")):
+        try:
+            code, o, e = util.popen([sc, "config", svc, "start=", mode], timeout=30)
+            txt = (o + "\n" + e).strip()
+            add("sc config %s exit=%s %s" % (svc, code, txt[-500:]))
+            if code != 0:
+                err("设置 %s 启动类型失败（退出码 %s）：%s" % (svc, code, txt[-500:]))
+        except Exception as ex:
+            err("设置 %s 启动类型失败：%s" % (svc, ex))
     try:
-        code, o, e = util.popen([sc, "config", "WebClient", "start=", "auto"], timeout=30)
-        add("sc config exit=%s %s" % (code, (o + e).strip()[:200]))
+        code, o, e = util.popen([sc, "stop", "WebClient"], timeout=30)
+        add("sc stop WebClient exit=%s %s" % (code, (o + "\n" + e).strip()[-500:]))
     except Exception as ex:
-        err("设置 WebClient 自动启动失败：%s" % ex)
-    try:
-        util.popen([sc, "stop", "WebClient"], timeout=30)
-    except Exception:
-        pass
+        add("sc stop WebClient: %s" % ex)
     for _ in range(20):
         if _svc_state(sc) in ("STOPPED", ""):
             break
@@ -286,22 +300,34 @@ def repair_child(directory="", out=""):
     if _svc_state(sc) == "RUNNING":
         res["restart"] = True
         err("WebClient 服务没有停止，注册表设置可能未生效，需要重启电脑")
-    for _ in range(3):
-        try:
-            util.popen([sc, "start", "WebClient"], timeout=45)
-        except Exception as ex:
-            err("启动 WebClient 失败：%s" % ex)
-        for _ in range(16):
-            if _svc_state(sc) == "RUNNING":
-                break
-            time.sleep(0.4)
-        if _svc_state(sc) == "RUNNING":
-            break
-        time.sleep(1)
 
+    start_errors = {}
+    for svc in ("MRxDAV", "WebClient"):
+        for _ in range(3):
+            try:
+                code, o, e = util.popen([sc, "start", svc], timeout=45)
+                txt = (o + "\n" + e).strip()
+                add("sc start %s exit=%s %s" % (svc, code, txt[-500:]))
+                if code != 0:
+                    start_errors[svc] = "退出码 %s：%s" % (code, txt[-500:])
+            except Exception as ex:
+                start_errors[svc] = str(ex)
+                add("sc start %s: %s" % (svc, ex))
+            for _ in range(16):
+                if _svc_state(sc, svc) == "RUNNING":
+                    break
+                time.sleep(0.4)
+            if _svc_state(sc, svc) == "RUNNING":
+                start_errors.pop(svc, None)
+                break
+            time.sleep(1)
+
+    res["mrxdav"] = _svc_state(sc, "MRxDAV") or "UNKNOWN"
     res["service"] = _svc_state(sc) or "UNKNOWN"
-    if res["service"] != "RUNNING":
-        err("WebClient 服务没有运行（%s）" % res["service"])
+    for svc, state in (("MRxDAV", res["mrxdav"]), ("WebClient", res["service"])):
+        if state != "RUNNING":
+            detail = start_errors.get(svc) or "没有取得 Windows 错误详情"
+            err("启动 %s 失败（当前状态 %s）：%s" % (svc, state, detail))
     try:
         _, o, e = util.popen([sc, "qc", "WebClient"], timeout=15)
         t = (o + e).upper()
@@ -313,16 +339,9 @@ def repair_child(directory="", out=""):
             err("WebClient 启动类型不是自动（%s）" % (res["start"] or "未知"))
     except Exception as ex:
         err("读取 WebClient 启动类型失败：%s" % ex)
-    try:
-        util.popen([sc, "start", "MRxDAV"], timeout=20)
-        res["mrxdav"] = _svc_state(sc, "MRxDAV") or "UNKNOWN"
-    except Exception:
-        pass
 
-    res["ok"] = (res["service"] == "RUNNING" and res["start"] == "AUTO_START"
-                 and res["basic"] == 2)
-    if res["service"] != "RUNNING" and res["feature"] == "Enabled":
-        res["restart"] = True
+    res["ok"] = (res["service"] == "RUNNING" and res["mrxdav"] == "RUNNING"
+                 and res["start"] == "AUTO_START" and res["basic"] == 2)
     try:
         os.makedirs(os.path.dirname(out), exist_ok=True)
         tmp = out + ".tmp"
@@ -331,8 +350,8 @@ def repair_child(directory="", out=""):
         os.replace(tmp, out)
     except OSError as ex:
         add("write result failed: %s" % ex)
-    add("repair end ok=%s restart=%s service=%s start=%s basic=%s errors=%s" %
-        (res["ok"], res["restart"], res["service"], res["start"], res["basic"], res["errors"]))
+    add("repair end ok=%s restart=%s service=%s mrxdav=%s start=%s basic=%s errors=%s" %
+        (res["ok"], res["restart"], res["service"], res["mrxdav"], res["start"], res["basic"], res["errors"]))
     if res["ok"] and not res["restart"]:
         return 0
     if res["restart"]:
@@ -390,7 +409,7 @@ def _neterr(out, err, code):
     low = text.lower()
     hit = re.search(r"(?:system error|系统错误)\s*[:：]?\s*(\d+)", text, re.I)
     hints = {
-        67: "Windows 的 WebClient 服务未运行，或系统没有启用 WebDAV 客户端。点「一键修复并重试」，按提示允许一次管理员授权即可。",
+        67: "Windows 无法创建 WebDAV 连接。请检查 MRxDAV 网络重定向器和 WebClient 服务；点「一键修复并重试」可自动检查。",
         85: "盘符已被占用，请在「虚拟磁盘」页换一个盘符，或先卸载原来的网络盘。",
         1219: "该盘符已被其他账号连接。请先断开原有连接，再回到存储熊挂载。",
         1244: "当前登录账号无权映射网络驱动器。请用管理员账号安装并启动存储熊。",
@@ -398,7 +417,7 @@ def _neterr(out, err, code):
     if hit:
         n = int(hit.group(1))
         if n in hints:
-            return hints[n]
+            return hints[n] + "\nWindows 原始错误：" + text
         return "Windows 返回错误 %d：%s" % (n, text)
     if "net use" in low:
         return "Windows 拒绝了挂载参数，请重新选择盘符后再试。"
@@ -480,19 +499,30 @@ class Drive:
 
     def _webclient(self):
         if os.name != "nt":
-            return False
-        try:
-            util.popen(["sc", "start", "MRxDAV"], timeout=20)
-            util.popen(["net", "start", "WebClient"], timeout=30)
+            return "一键修复仅支持 Windows"
+        root = os.environ.get("SystemRoot") or r"C:\Windows"
+        sc = os.path.join(root, "System32", "sc.exe")
+        for svc in ("MRxDAV", "WebClient"):
+            try:
+                if svc == "MRxDAV":
+                    code, out, err = util.popen([sc, "start", svc], timeout=30)
+                else:
+                    code, out, err = util.popen(["net", "start", svc], timeout=45)
+                txt = (out + "\n" + err).strip()
+            except Exception as ex:
+                code, txt = -1, str(ex)
             for _ in range(15):
-                _, out, err = util.popen(["sc", "query", "WebClient"], timeout=15)
-                if "RUNNING" in (out + err).upper():
-                    time.sleep(1.2)
-                    return True
+                if _svc_state(sc, svc) == "RUNNING":
+                    break
                 time.sleep(0.4)
-        except Exception:
-            pass
-        return False
+            if _svc_state(sc, svc) != "RUNNING":
+                v = _win_verify()
+                detail = "%s 启动失败（退出码 %s）：%s" % (svc, code, txt[-500:] or "无命令输出")
+                util.log("dav: " + detail)
+                return detail + "\n现场状态：MRxDAV %s / WebClient %s" % (
+                    v.get("mrxdav") or "未知", v.get("service") or "未知")
+        time.sleep(1.2)
+        return ""
 
     def _unmap(self, letter):
         try:
@@ -575,23 +605,23 @@ class Drive:
             if v["ok"]:
                 util.log("repair-webdav: verified without result")
                 return {"repaired": True, "restart": False, "service": v["service"],
-                        "feature": "", "basic": v["basic"]}
+                        "mrxdav": v["mrxdav"], "feature": "", "basic": v["basic"]}
             raise RuntimeError("自动修复没有完成。\n" + _repair_msg(None, v, logf, code))
         errs = res.get("errors") or []
         if isinstance(errs, str):
             errs = [errs]
         errs = [str(x) for x in errs if str(x).strip()]
-        util.log("repair-webdav: ok=%s service=%s start=%s feature=%s basic=%s errors=%s" %
-                 (res.get("ok"), res.get("service"), res.get("start"), res.get("feature"),
-                  res.get("basic"), errs))
-        if res.get("ok"):
+        util.log("repair-webdav: ok=%s service=%s mrxdav=%s start=%s feature=%s basic=%s errors=%s" %
+                 (res.get("ok"), res.get("service"), res.get("mrxdav"), res.get("start"),
+                  res.get("feature"), res.get("basic"), errs))
+        if res.get("ok") and v["ok"]:
             return {"repaired": True, "restart": bool(res.get("restart")),
-                    "service": res.get("service") or "", "feature": res.get("feature") or "",
-                    "basic": int(res.get("basic") or 0)}
+                    "service": res.get("service") or "", "mrxdav": res.get("mrxdav") or "",
+                    "feature": res.get("feature") or "", "basic": int(res.get("basic") or 0)}
         if v["ok"]:
             return {"repaired": True, "restart": bool(res.get("restart")),
-                    "service": v["service"], "feature": res.get("feature") or "",
-                    "basic": v["basic"]}
+                    "service": v["service"], "mrxdav": v["mrxdav"],
+                    "feature": res.get("feature") or "", "basic": v["basic"]}
         if res.get("restart") or res.get("feature") == "EnablePending":
             raise RuntimeError("WebDAV 组件已启用，但 Windows 需要重启后才会生效。请重启电脑，"
                                "再打开存储熊点击“挂载为网络盘”")
@@ -637,9 +667,9 @@ class Drive:
         dests = [info["url"], "\\\\127.0.0.1@%d\\%s" % (self.port, DAV.strip("/"))]
         errs = []
         for attempt in range(4):
-            ready = self._webclient()
-            if not ready:
-                errs.append("WebClient 服务没有进入运行状态。请点「一键修复 WebDAV」后重试。")
+            start_error = self._webclient()
+            if start_error:
+                errs.append(start_error)
             self._clean()
             for letter in letters:
                 self._unmap(letter)
