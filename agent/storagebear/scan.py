@@ -8,8 +8,10 @@ from .remote import ApiError
 SKIP = {
     "system volume information", "$recycle.bin", "windows", "program files", "program files (x86)",
     "programdata", "appdata", "node_modules", ".git", "__pycache__", "$winreagent", "recovery",
-    "perflogs", "config.msi", ".cache", ".local", "library", "proc", "sys", "dev", "run",
+    "perflogs", "config.msi", ".cache", ".local", "library",
 }
+if os.name != "nt":
+    SKIP |= {"proc", "sys", "dev", "run"}
 DEFAULT_EXT = ([".pdf", ".mp3", ".mp4", ".m4a", ".wav", ".flac", ".mkv", ".avi", ".mov", ".webm"]
                + util.OFFICE_EXT + util.ARCHIVE_EXT)
 

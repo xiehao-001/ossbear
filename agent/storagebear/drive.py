@@ -893,6 +893,9 @@ def _handler(agent, user, pw, token=""):
             depth = (self.headers.get("Depth") or "1").lower()
             xml = ['<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">']
             if kind == "root":
+                # Windows WebDAV 客户端要求 PROPFIND 结果包含被请求的集合自身，
+                # 否则会把共享根判为不存在并报系统错误 67。
+                xml.append(self._prop([], {"path": "", "mtime": 0}, "dir"))
                 if depth != "0":
                     for alias in _roots(agent):
                         r = {"path": "", "mtime": 0}
@@ -941,8 +944,10 @@ def _handler(agent, user, pw, token=""):
                 return self._deny()
             parts = self._parts()
             row, kind, _ = self._at(parts) if parts is not None else (None, "missing", None)
+            if kind in ("root", "dir"):
+                return self._send(200, ctype="text/html; charset=utf-8")
             if kind != "file":
-                return self._send(405 if kind == "dir" else 404)
+                return self._send(404)
             self._head(row)
 
         def _head(self, row):
@@ -966,14 +971,52 @@ def _handler(agent, user, pw, token=""):
                 return self._deny()
             parts = self._parts()
             row, kind, _ = self._at(parts) if parts is not None else (None, "missing", None)
+            if kind in ("root", "dir"):
+                return self._listing(parts, row, kind)
             if kind != "file":
-                return self._send(405 if kind == "dir" else 404)
+                return self._send(404)
             p = row.get("path") or ""
             if os.path.isfile(p):
                 return self._file(row)
             if row.get("object_key"):
                 return self._cloud(row)
             return self._send(404)
+
+        def _listing(self, parts, row, kind):
+            if kind == "root":
+                title = "存储熊 WebDAV"
+                items = [(alias, self._href([alias], True), True) for alias in _roots(agent)]
+            else:
+                title = parts[-1] if parts else "存储熊"
+                items = []
+                try:
+                    kids = agent.db.kids(row["path"])
+                except Exception:
+                    kids = []
+                for k in kids:
+                    items.append((k["name"], self._href(parts + [k["name"]], bool(k["is_dir"])),
+                                  bool(k["is_dir"])))
+            up = ""
+            if kind == "dir" and parts:
+                up_path = self._href(parts[:-1], True)
+                up = '<p><a href="%s">↑ 上一级</a></p>' % _attr(up_path)
+            rows = []
+            for name, href, is_dir in items:
+                label = escape(str(name)) + ("/" if is_dir else "")
+                rows.append('<li><a href="%s">%s</a></li>' % (_attr(href), label))
+            body = ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+                    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                    '<title>%s · 存储熊</title><style>'
+                    'body{font:14px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;background:#f4f6fb;color:#1c2430}'
+                    'main{max-width:760px;margin:40px auto;padding:24px 28px;background:#fff;border-radius:14px;'
+                    'box-shadow:0 12px 40px rgba(23,35,61,.08)}'
+                    'h1{font-size:18px;margin:0 0 4px}.hint{color:#7a8496;font-size:12.5px;margin:0 0 16px}'
+                    'ul{list-style:none;padding:0;margin:0}li{padding:7px 0;border-bottom:1px solid #eef1f7}'
+                    'a{color:#1668dc;text-decoration:none}a:hover{text-decoration:underline}'
+                    '</style></head><body><main><h1>%s</h1>'
+                    '<p class="hint">存储熊只读虚拟盘 · WebDAV</p>%s<ul>%s</ul></main></body></html>') % (
+                escape(title), escape(title), up, "".join(rows))
+            self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
 
         def _file(self, row):
             p = row["path"]

@@ -654,7 +654,7 @@ function rowHtml(x) {
 }
 function emptyFiles(mode, filtOn) {
   if (filtOn) return `<div class="empty"><div class="e-ic">${IC.scan}</div><b>没有符合筛选条件的文件</b><p>可以换一个类型、状态或云存储条件。</p><button class="btn btn-sm" data-act="files-filter-clear">清除筛选</button></div>`;
-  if (mode === "search") return `<div class="empty"><div class="e-ic">${IC.scan}</div><b>没有找到匹配文件</b><p>试试更短的关键词，或扫描新的目录。</p><button class="btn btn-sm" data-act="files-reset">清空搜索</button></div>`;
+  if (mode === "search") return `<div class="empty"><div class="e-ic">${IC.scan}</div><b>没有找到匹配文件</b><p>试试更短的关键词。若文档确实存在却搜不到，可能是旧版本扫描时尚未收录 Office / WPS 类型，重新扫描一次即可补全索引。</p><div class="row" style="justify-content:center"><button class="btn btn-sm" data-act="scan-modal">重新扫描</button><button class="btn btn-sm btn-ghost" data-act="files-reset">清空搜索</button></div></div>`;
   if (mode === "browse") return `<div class="empty"><div class="e-ic">${IC.folder}</div><b>这里还没有索引记录</b><p>只显示已经扫描过的文件与目录。可以返回文件库，或扫描包含此目录的位置。</p><button class="btn btn-sm" data-act="files-reset">返回文件库</button></div>`;
   return `<div class="empty"><div class="e-ic">${IC.scan}</div><b>文件库是空的</b><p>先扫描包含文档、PDF、音乐或视频的目录。扫描不会上传文件。</p><button class="btn btn-primary" data-act="scan-modal">${IC.scan} 一键扫描</button></div>`;
 }
@@ -1499,7 +1499,7 @@ document.addEventListener("submit", async (ev) => {
     if (f.dataset.form === "files-search") {
       const q = String(f.elements.q.value || "").trim();
       if (q.length > 80) throw new Error("搜索词不能超过 80 个字符");
-      st.q = q; st.path = ""; st.provider = ""; st.sel.clear();
+      st.q = q; st.path = ""; st.provider = ""; st.filter = "all"; st.status = "all"; st.sel.clear();
       if (st.view !== "files") setView("files"); else render();
     } else if (f.dataset.form === "provider") {
       await submitProvider(f, btn);

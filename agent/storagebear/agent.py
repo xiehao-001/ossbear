@@ -44,6 +44,14 @@ class Agent:
         d.setdefault("server", "")
         d.setdefault("user", {})
         d.setdefault("token", "")
+        if not d.get("exts_office_merged"):
+            xs = d.get("exts")
+            if isinstance(xs, list):
+                have = {str(x).lower() for x in xs}
+                add = [x for x in util.OFFICE_EXT if x not in have]
+                if add:
+                    d["exts"] = list(xs) + add
+            d["exts_office_merged"] = True
         util.save_json(util.path("config.json"), d)
         self.api = Api(d.get("server", ""), d.get("token", ""), d["device_id"])
 
@@ -55,6 +63,32 @@ class Agent:
             self.th = threading.Thread(target=self._beat, name="sb-agent", daemon=True)
             self.th.start()
         util.log("agent start v%s device=%s" % (VERSION, self.cfg["device_id"]))
+        self._backfill_docs()
+
+    def _backfill_docs(self):
+        # 旧版本索引可能只收录了 PDF / 音视频；升级后补扫一次，让文档能被搜索到。
+        try:
+            if self.cfg.get("doc_backfill"):
+                return
+            if not self.cfg.get("last_scan"):
+                return
+            roots = [r.get("path") if isinstance(r, dict) else r
+                     for r in (self.cfg.get("roots") or self.cfg.get("last_roots") or [])]
+            roots = [r for r in roots if r and os.path.isdir(util.native(r))]
+            if not roots:
+                return
+            marks = ",".join("?" for _ in util.OFFICE_EXT)
+            row = self.db.one("SELECT COUNT(*) AS n FROM files WHERE is_dir=0 AND ext IN (" + marks + ")",
+                              [x.lower() for x in util.OFFICE_EXT])
+            if row and int(row.get("n") or 0) > 0:
+                return
+            self.cfg["doc_backfill"] = True
+            with self.lk:
+                util.save_json(util.path("config.json"), self.cfg)
+            self.jobs.add("scan", lambda job: scan.run(self, job, {"roots": roots}))
+            util.log("doc backfill queued for %d root(s)" % len(roots))
+        except Exception as e:
+            util.log("doc backfill: %s" % e)
 
     def stop(self):
         self.stop_evt.set()
