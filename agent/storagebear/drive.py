@@ -533,6 +533,41 @@ class Drive:
         except Exception:
             pass
 
+    def _probe(self, letter):
+        res = {}
+
+        def run():
+            try:
+                os.listdir(letter + ":\\")
+                res["ok"] = True
+            except Exception as e:
+                res["err"] = str(e)
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        t.join(20)
+        if t.is_alive():
+            return False, "打开盘符超时"
+        return bool(res.get("ok")), res.get("err") or ""
+
+    def _logmark(self):
+        try:
+            return os.path.getsize(util.path("logs", "webdav.log"))
+        except OSError:
+            return 0
+
+    def _lognew(self, mark):
+        try:
+            p = util.path("logs", "webdav.log")
+            if os.path.getsize(p) <= mark:
+                return []
+            with open(p, "rb") as f:
+                f.seek(mark)
+                lines = f.read().decode("utf-8", "replace").splitlines()
+            return [x for x in lines[-8:] if x]
+        except Exception:
+            return []
+
     def _clean(self):
         if os.name != "nt":
             return
@@ -679,14 +714,17 @@ class Drive:
                 seen.add(dest)
                 mounts.append((dest, cred, label))
 
-        if tok:
-            anon = url.rstrip("/") + "/" + quote(tok, safe="")
-            add(anon, False, "本机安全会话")
-            add(anon.replace("127.0.0.1", "localhost"), False, "本机安全会话")
-            add(unc + "\\" + tok, False, "本机安全会话")
+        # 账号方式优先：Windows 会保存凭据，打开盘符时的后续请求也能通过认证。
+        # token 方式作为备选，初始请求可绕过 HTTP Basic。
         add(url, True, "本机账号")
         add(url_local, True, "本机账号")
         add(unc, True, "网络路径")
+        if tok:
+            anon = url.rstrip("/") + "/" + quote(tok, safe="") + "/"
+            # 同时带上账号：Windows 打开盘符时若绕过 token 请求根路径，也能用 Basic 通过。
+            add(anon, True, "本机安全会话")
+            add(anon.replace("127.0.0.1", "localhost"), True, "本机安全会话")
+            add(unc + "\\" + tok, True, "本机安全会话")
 
         def clean_dest(s):
             return (s or "").replace(tok, "***") if tok else (s or "")
@@ -704,14 +742,28 @@ class Drive:
                     if cred:
                         args.extend([info["pass"], "/user:" + info["user"]])
                     args.append("/persistent:no")
+                    mark = self._logmark()
                     code, out, err = util.popen(args, timeout=60)
                     if code == 0:
-                        c = util.config()
-                        c["drive_letter"] = letter + ":"
-                        util.save_json(util.path("config.json"), c)
-                        self.agent.cfg = c
-                        util.log("dav: mounted %s -> %s (%s)" % (letter + ":", clean_dest(dest), label))
-                        return self.info()
+                        ok, probe = self._probe(letter)
+                        if ok:
+                            c = util.config()
+                            c["drive_letter"] = letter + ":"
+                            util.save_json(util.path("config.json"), c)
+                            self.agent.cfg = c
+                            util.log("dav: mounted %s -> %s (%s)" % (letter + ":", clean_dest(dest), label))
+                            return self.info()
+                        msg = label + "：已连接但打开失败（%s）" % (probe[:160] or "无返回")
+                        if tok:
+                            msg = msg.replace(tok, "***")
+                        tail = self._lognew(mark)
+                        if tail:
+                            msg += "\n" + "\n".join(tail)
+                        errs.append(msg)
+                        util.log("dav: mount %s %s (%s) connected but unusable -> %s" %
+                                 (letter + ":", clean_dest(dest), label, msg.replace("\n", " ")[:400]))
+                        self._unmap(letter)
+                        continue
                     msg = label + "：" + _neterr(out, err, code)
                     if tok:
                         msg = msg.replace(tok, "***")
@@ -757,13 +809,22 @@ def _handler(agent, user, pw, token=""):
                 first = rest.split("/", 1)[0]
             except Exception:
                 return False
-            return bool(token and first) and hmac.compare_digest(first, token)
+            return self._tokmatch(first)
+
+        def _tokmatch(self, seg):
+            if not token or not seg:
+                return False
+            if hmac.compare_digest(seg, token):
+                return True
+            # Windows WebDAV 偶尔会在共享根最后一段后补一个句点。
+            return seg.endswith(".") and hmac.compare_digest(seg[:-1], token)
 
         def _allow(self):
+            self.tokpath = self._token_ok()
             if self._auth():
                 self.anon = False
                 return True
-            self.anon = self._token_ok()
+            self.anon = self.tokpath
             return self.anon
 
         def _send(self, code, body=b"", ctype="text/plain; charset=utf-8", extra=None):
@@ -780,6 +841,27 @@ def _handler(agent, user, pw, token=""):
                     self.wfile.write(body)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
+            self._logreq(code)
+
+        def _logreq(self, code):
+            try:
+                u = urlsplit(self.path)
+                path = u.path + (("?" + u.query) if u.query else "")
+                if token:
+                    path = path.replace(token, "***")
+                line = "%s %s %s -> %s %s\n" % (
+                    time.strftime("%Y-%m-%d %H:%M:%S"), self.command, path[:300], code,
+                    (self.headers.get("User-Agent") or "")[:120])
+                f = util.path("logs", "webdav.log")
+                if os.path.exists(f) and os.path.getsize(f) > 512 * 1024:
+                    try:
+                        os.replace(f, f + ".1")
+                    except OSError:
+                        pass
+                with open(f, "a", encoding="utf-8") as fp:
+                    fp.write(line)
+            except Exception:
+                pass
 
         def _deny(self):
             self.close_connection = True
@@ -801,7 +883,7 @@ def _handler(agent, user, pw, token=""):
             rest = path[len(DAV):].strip("/")
             if token and rest:
                 first, _, tail = rest.partition("/")
-                if hmac.compare_digest(first, token):
+                if self._tokmatch(first):
                     rest = tail.strip("/")
             if not rest:
                 return []
@@ -840,7 +922,7 @@ def _handler(agent, user, pw, token=""):
             return None, "missing", None
 
         def _href(self, parts, is_dir):
-            base = DAV + (("/" + token) if (token and getattr(self, "anon", False)) else "")
+            base = DAV + (("/" + token) if (token and getattr(self, "tokpath", False)) else "")
             h = base + "/" + "/".join(quote(x, safe="") for x in parts)
             if not parts:
                 h = base + "/"
@@ -877,7 +959,7 @@ def _handler(agent, user, pw, token=""):
         def do_OPTIONS(self):
             self._drain()
             if not self._allow():
-                return self._deny()
+                self.close_connection = True
             self._send(200, b"", extra={"Allow": "OPTIONS, GET, HEAD, PROPFIND"})
 
         def do_PROPFIND(self):
@@ -1004,6 +1086,7 @@ def _handler(agent, user, pw, token=""):
             for name, href, is_dir in items:
                 label = escape(str(name)) + ("/" if is_dir else "")
                 rows.append('<li><a href="%s">%s</a></li>' % (_attr(href), label))
+            empty = "" if rows else '<p class="hint">这里还没有索引记录，或该目录为空。请先在存储熊客户端完成扫描。</p>'
             body = ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
                     '<meta name="viewport" content="width=device-width,initial-scale=1">'
                     '<title>%s · 存储熊</title><style>'
@@ -1014,8 +1097,8 @@ def _handler(agent, user, pw, token=""):
                     'ul{list-style:none;padding:0;margin:0}li{padding:7px 0;border-bottom:1px solid #eef1f7}'
                     'a{color:#1668dc;text-decoration:none}a:hover{text-decoration:underline}'
                     '</style></head><body><main><h1>%s</h1>'
-                    '<p class="hint">存储熊只读虚拟盘 · WebDAV</p>%s<ul>%s</ul></main></body></html>') % (
-                escape(title), escape(title), up, "".join(rows))
+                    '<p class="hint">存储熊只读虚拟盘 · WebDAV</p>%s<ul>%s</ul>%s</main></body></html>') % (
+                escape(title), escape(title), up, "".join(rows), empty)
             self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
 
         def _file(self, row):
