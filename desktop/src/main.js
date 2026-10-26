@@ -1,5 +1,5 @@
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, shell, clipboard, nativeImage } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -25,6 +25,49 @@ let trayTip = false;
 function log(s) {
   const line = new Date().toISOString() + " " + s + "\n";
   try { fs.appendFileSync(path.join(DATA, "agent", "logs", "desktop.log"), line); } catch (_) {}
+}
+
+const RUN_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const RUN_APPROVED = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
+const RUN_NAMES = ["StorageBear", "存储熊"];
+
+function autoStartGet() {
+  if (process.platform !== "win32" || DEV) return false;
+  try {
+    const s = app.getLoginItemSettings({ path: process.execPath, args: ["--hidden"] });
+    return s.openAtLogin === true && s.executableWillLaunchAtLogin !== false;
+  } catch (_) {
+    return false;
+  }
+}
+
+function autoStartSet(on) {
+  if (process.platform !== "win32" || DEV) return false;
+  const del = (key, name) => {
+    try {
+      execFileSync("reg", ["delete", key, "/v", name, "/f"], {
+        stdio: "ignore", windowsHide: true, timeout: 5000,
+      });
+    } catch (_) {}
+  };
+  try {
+    for (const n of RUN_NAMES) {
+      del(RUN_KEY, n);
+      del(RUN_APPROVED, n);
+    }
+    const opt = {
+      openAtLogin: !!on,
+      path: process.execPath,
+      args: ["--hidden"],
+    };
+    if (on) opt.enabled = true;
+    app.setLoginItemSettings(opt);
+  } catch (e) {
+    log("autostart: " + e.message);
+  }
+  const state = autoStartGet();
+  log("autostart set=" + !!on + " state=" + state);
+  return state;
 }
 
 function runtimePath() {
@@ -316,7 +359,7 @@ const calls = {
   syncMeta: () => ({ route: "/api/sync/meta", method: "POST", data: {} }),
   drive: () => ({ route: "/api/drive" }),
   driveAction: (a) => ({ route: "/api/drive/" + encodeURIComponent(a.action), method: "POST", data: {} }),
-  driveRepair: () => ({ route: "/api/drive/repair", method: "POST", data: {}, timeout: 240000 }),
+  driveRepair: () => ({ route: "/api/drive/repair", method: "POST", data: {}, timeout: 450000 }),
   driveConfig: (a) => ({ route: "/api/drive/config", method: "POST", data: a }),
 };
 
@@ -457,7 +500,8 @@ ipcMain.handle("sb:app-info", () => ({
   dataDir: DATA,
   logFile: path.join(DATA, "agent", "logs", "agent.log"),
   platform: process.platform,
-  autoStart: app.getLoginItemSettings ? app.getLoginItemSettings().openAtLogin : false,
+  startHidden: HIDDEN,
+  autoStart: autoStartGet(),
   updates: updaterReady(),
 }));
 
@@ -503,8 +547,8 @@ ipcMain.handle("sb:open-folder", async (e, kind) => {
   return target;
 });
 
-ipcMain.handle("sb:auto-start", (e, on) => {
-  if (DEV) return false;
-  app.setLoginItemSettings({ openAtLogin: !!on, openAsHidden: true, args: ["--hidden"] });
-  return app.getLoginItemSettings().openAtLogin;
+ipcMain.handle("sb:auto-start", (event, on) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  return autoStartSet(!!on);
 });

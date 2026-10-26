@@ -4,10 +4,12 @@ import http.server
 import json
 import os
 import re
+import secrets
 import shutil
 import socket
 import socketserver
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -21,108 +23,321 @@ from . import ops, util
 DAV = "/dav"
 RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
 
-REPAIR_PS = r"""
-$ErrorActionPreference = 'Continue'
-$ProgressPreference = 'SilentlyContinue'
-$out = [ordered]@{
-  ok = $false
-  feature = ''
-  service = ''
-  start = ''
-  basic = 0
-  mrxdav = ''
-  restart = $false
-  errors = @()
-}
-$log = '__LOG__'
-function Add-Log([string]$s) {
-  try { Add-Content -LiteralPath $log -Value ((Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' ' + $s) -Encoding UTF8 } catch {}
-}
-try {
-  Add-Log 'repair begin'
-  $opt = Get-WindowsOptionalFeature -Online -FeatureName FS-WebDAV-Redirector -ErrorAction SilentlyContinue
-  if ($null -eq $opt) {
-    $out.errors += '未找到 WebDAV Redirector 组件'
-    Add-Log 'feature not found'
-  } else {
-    $out.feature = [string]$opt.State
-    Add-Log ('feature ' + $out.feature)
-    if ($opt.State -ne 'Enabled') {
-      $r = Enable-WindowsOptionalFeature -Online -FeatureName FS-WebDAV-Redirector -All -NoRestart -ErrorAction SilentlyContinue
-      if ($r -and $r.RestartNeeded) { $out.restart = $true }
-      $opt = Get-WindowsOptionalFeature -Online -FeatureName FS-WebDAV-Redirector -ErrorAction SilentlyContinue
-      if ($opt) { $out.feature = [string]$opt.State }
-      Add-Log ('feature now ' + $out.feature)
-    }
-  }
-  $svc = Get-Service -Name WebClient -ErrorAction SilentlyContinue
-  if ($null -eq $svc) {
-    $out.errors += 'WebClient 服务不存在'
-  } else {
-    Set-Service -Name WebClient -StartupType Automatic -ErrorAction SilentlyContinue
-    $key = 'HKLM:\SYSTEM\CurrentControlSet\Services\WebClient\Parameters'
-    $regkey = 'HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters'
-    if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
-    $reg = Join-Path $env:SystemRoot 'System32\reg.exe'
-    & $reg add $regkey /v BasicAuthLevel /t REG_DWORD /d 2 /f | Out-Null
-    if ($LASTEXITCODE -ne 0) { $out.errors += '写入 BasicAuthLevel 失败' }
-    & $reg add $regkey /v FileSizeLimitInBytes /t REG_DWORD /d 4294967295 /f | Out-Null
-    if ($LASTEXITCODE -ne 0) { $out.errors += '写入 FileSizeLimitInBytes 失败' }
-    try {
-      Restart-Service -Name WebClient -Force -ErrorAction Stop
-    } catch {
-      try { Start-Service -Name WebClient -ErrorAction Stop }
-      catch { $out.errors += ('启动 WebClient 失败：' + $_.Exception.Message) }
-    }
-    for ($i = 0; $i -lt 10; $i++) {
-      Start-Sleep -Milliseconds 400
-      $svc = Get-Service -Name WebClient -ErrorAction SilentlyContinue
-      if ($svc -and $svc.Status -eq 'Running') { break }
-    }
-    $dav = Get-Service -Name MRxDAV -ErrorAction SilentlyContinue
-    if ($dav -and $dav.Status -ne 'Running') {
-      try { Start-Service -Name MRxDAV -ErrorAction Stop } catch { $out.errors += 'MRxDAV 驱动没有启动' }
-    }
-    $svc = Get-Service -Name WebClient -ErrorAction SilentlyContinue
-    if ($svc) {
-      $out.service = [string]$svc.Status
-      $wmi = Get-CimInstance Win32_Service -Filter "Name='WebClient'" -ErrorAction SilentlyContinue
-      if ($wmi) { $out.start = [string]$wmi.StartMode }
-    }
-    try { $out.basic = [int](Get-ItemProperty -Path $key -Name BasicAuthLevel -ErrorAction Stop).BasicAuthLevel } catch {}
-    $dav = Get-Service -Name MRxDAV -ErrorAction SilentlyContinue
-    if ($dav) { $out.mrxdav = [string]$dav.Status }
-    $out.ok = ($out.service -eq 'Running')
-  }
-} catch {
-  $out.errors += $_.Exception.Message
-  Add-Log ('repair error: ' + $_.Exception.Message)
-}
-try {
-  $out | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath '__RESULT__' -Encoding UTF8
-} catch {}
-Add-Log ('repair end ok=' + $out.ok + ' restart=' + $out.restart)
-if ($out.ok) { exit 0 }
-if ($out.restart) { exit 3 }
-exit 2
-"""
 
-LAUNCH_PS = r"""
-$ErrorActionPreference = 'Stop'
-try {
-  $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-  $p = Start-Process -FilePath $ps -Verb RunAs -WindowStyle Hidden -Wait -PassThru `
-    -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', '__CODE__')
-  exit $p.ExitCode
-} catch {
-  Write-Output $_.Exception.Message
-  exit 1223
-}
-"""
+def _q(p):
+    return '"%s"' % str(p).replace('"', "")
 
 
-def _psq(p):
-    return str(p).replace("'", "''")
+def _repair_dir():
+    base = os.environ.get("PUBLIC") or r"C:\Users\Public"
+    d = os.path.join(base, "StorageBear", "Repair")
+    try:
+        os.makedirs(d, exist_ok=True)
+        try:
+            util.popen(["icacls", d, "/grant", "*S-1-5-32-544:(OI)(CI)M"], timeout=15)
+        except Exception:
+            pass
+        probe = os.path.join(d, ".w")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("1")
+        os.remove(probe)
+        return d
+    except OSError:
+        d = util.path("tmp")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+
+def _tail(path, n=800):
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - n * 2))
+            raw = f.read()
+        return raw.decode("utf-8", "replace").strip()[-n:]
+    except OSError:
+        return ""
+
+
+def _svc_state(sc, name="WebClient"):
+    try:
+        _, o, e = util.popen([sc, "query", name], timeout=15)
+    except Exception:
+        return ""
+    t = (o + e).upper()
+    for s in ("RUNNING", "STOPPED", "START_PENDING", "STOP_PENDING", "PAUSED"):
+        if s in t:
+            return s
+    return ""
+
+
+def _win_verify():
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    sc = os.path.join(root, "System32", "sc.exe")
+    rg = os.path.join(root, "System32", "reg.exe")
+    v = {"service": "", "start": "", "basic": 0, "ok": False}
+    v["service"] = _svc_state(sc) or "UNKNOWN"
+    try:
+        _, o, e = util.popen([sc, "qc", "WebClient"], timeout=15)
+        t = (o + e).upper()
+        for k in ("AUTO_START", "DEMAND_START", "DISABLED", "SYSTEM_START", "BOOT_START"):
+            if k in t:
+                v["start"] = k
+                break
+    except Exception:
+        pass
+    try:
+        _, o, e = util.popen([rg, "query",
+                              r"HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters",
+                              "/v", "BasicAuthLevel"], timeout=15)
+        m = re.search(r"REG_DWORD\s+0x([0-9a-fA-F]+)", o)
+        if m:
+            v["basic"] = int(m.group(1), 16)
+    except Exception:
+        pass
+    v["ok"] = v["service"] == "RUNNING" and v["start"] == "AUTO_START" and v["basic"] == 2
+    return v
+
+
+def _elevate(exe, params, cwd, timeout=240):
+    import ctypes
+    from ctypes import wintypes
+
+    class SEI(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("fMask", ctypes.c_ulong),
+            ("hwnd", wintypes.HWND),
+            ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HINSTANCE),
+            ("lpIDList", ctypes.c_void_p),
+            ("lpClass", wintypes.LPCWSTR),
+            ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD),
+            ("hIcon", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ole32 = ctypes.WinDLL("ole32")
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SEI)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    k32.WaitForSingleObject.restype = wintypes.DWORD
+    k32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k32.GetExitCodeProcess.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+    ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    ole32.CoInitializeEx.restype = ctypes.c_long
+    ole32.CoUninitialize.argtypes = []
+    ole32.CoUninitialize.restype = None
+    co = False
+    h = None
+    try:
+        try:
+            hr = ole32.CoInitializeEx(None, 2)
+            co = hr in (0, 1)
+        except Exception:
+            pass
+        sei = SEI()
+        sei.cbSize = ctypes.sizeof(SEI)
+        sei.fMask = 0x40 | 0x400
+        sei.lpVerb = "runas"
+        sei.lpFile = exe
+        sei.lpParameters = params
+        sei.lpDirectory = cwd
+        sei.nShow = 0
+        ctypes.set_last_error(0)
+        if not shell32.ShellExecuteExW(ctypes.byref(sei)):
+            return -int(ctypes.get_last_error() or 1), ""
+        h = sei.hProcess
+        if not h:
+            return -999, ""
+        w = int(k32.WaitForSingleObject(wintypes.HANDLE(h), int(timeout * 1000)))
+        if w == 258:
+            return -998, ""
+        if w == 0xFFFFFFFF:
+            return -997, ""
+        code = wintypes.DWORD(0)
+        if not k32.GetExitCodeProcess(wintypes.HANDLE(h), ctypes.byref(code)):
+            return -997, ""
+        return int(code.value), ""
+    finally:
+        if h:
+            try:
+                k32.CloseHandle(wintypes.HANDLE(h))
+            except Exception:
+                pass
+        if co:
+            try:
+                ole32.CoUninitialize()
+            except Exception:
+                pass
+
+
+def _repair_msg(res, v, logf, code):
+    errs = (res or {}).get("errors") or []
+    if isinstance(errs, str):
+        errs = [errs]
+    errs = [str(x) for x in errs if str(x).strip()]
+    msg = "；".join(errs) if errs else "WebClient 服务没有进入运行状态"
+    state = []
+    if res:
+        if res.get("service"):
+            state.append("服务 " + str(res.get("service")))
+        if res.get("start"):
+            state.append("启动类型 " + str(res.get("start")))
+        if res.get("basic"):
+            state.append("BasicAuthLevel " + str(res.get("basic")))
+    elif v:
+        state.append("服务 " + str(v.get("service") or "未知"))
+        state.append("启动类型 " + str(v.get("start") or "未知"))
+        state.append("BasicAuthLevel " + str(v.get("basic") or 0))
+    if state:
+        msg += "\n现场状态：" + " / ".join(state)
+    if code and int(code) > 0:
+        msg += "\n修复进程退出码：" + str(int(code))
+    tail = _tail(logf, 700)
+    if tail:
+        msg += "\n最近日志：\n" + tail
+    return msg
+
+
+def repair_child(directory="", out=""):
+    if os.name != "nt":
+        return 2
+    d = directory or _repair_dir()
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError:
+        pass
+    out = out or os.path.join(d, "repair-webdav.json")
+    logf = os.path.join(d, "repair-webdav.log")
+    res = {"ok": False, "feature": "", "service": "", "start": "", "basic": 0,
+           "mrxdav": "", "restart": False, "errors": []}
+
+    def add(s):
+        try:
+            with open(logf, "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + str(s) + "\n")
+        except OSError:
+            pass
+
+    def err(s):
+        res["errors"].append(str(s))
+        add("error: " + str(s))
+
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    dism = os.path.join(root, "System32", "dism.exe")
+    rg = os.path.join(root, "System32", "reg.exe")
+    sc = os.path.join(root, "System32", "sc.exe")
+    key = r"HKLM\SYSTEM\CurrentControlSet\Services\WebClient\Parameters"
+    add("repair begin dir=%s" % d)
+    try:
+        code, o, e = util.popen([dism, "/Online", "/Enable-Feature",
+                                 "/FeatureName:FS-WebDAV-Redirector", "/All", "/NoRestart"], timeout=240)
+        txt = (o + "\n" + e).strip()
+        add("dism exit=%s %s" % (code, txt[-700:]))
+        if code == 0:
+            res["feature"] = "Enabled"
+        elif code == 3010:
+            res["feature"] = "EnablePending"
+            res["restart"] = True
+        else:
+            err("启用 WebDAV 组件失败（DISM 退出码 %s）" % code)
+    except Exception as ex:
+        err("启用 WebDAV 组件失败：%s" % ex)
+
+    for name, val in (("BasicAuthLevel", "2"), ("FileSizeLimitInBytes", "4294967295")):
+        try:
+            code, o, e = util.popen([rg, "add", key, "/v", name, "/t", "REG_DWORD", "/d", val, "/f"], timeout=30)
+            if code != 0:
+                err("写入 %s 失败（退出码 %s）" % (name, code))
+        except Exception as ex:
+            err("写入 %s 失败：%s" % (name, ex))
+    try:
+        _, o, e = util.popen([rg, "query", key, "/v", "BasicAuthLevel"], timeout=15)
+        m = re.search(r"REG_DWORD\s+0x([0-9a-fA-F]+)", o)
+        res["basic"] = int(m.group(1), 16) if m else 0
+    except Exception:
+        pass
+    add("basic auth level=%s" % res["basic"])
+
+    try:
+        code, o, e = util.popen([sc, "config", "WebClient", "start=", "auto"], timeout=30)
+        add("sc config exit=%s %s" % (code, (o + e).strip()[:200]))
+    except Exception as ex:
+        err("设置 WebClient 自动启动失败：%s" % ex)
+    try:
+        util.popen([sc, "stop", "WebClient"], timeout=30)
+    except Exception:
+        pass
+    for _ in range(20):
+        if _svc_state(sc) in ("STOPPED", ""):
+            break
+        time.sleep(0.5)
+    if _svc_state(sc) == "RUNNING":
+        res["restart"] = True
+        err("WebClient 服务没有停止，注册表设置可能未生效，需要重启电脑")
+    for _ in range(3):
+        try:
+            util.popen([sc, "start", "WebClient"], timeout=45)
+        except Exception as ex:
+            err("启动 WebClient 失败：%s" % ex)
+        for _ in range(16):
+            if _svc_state(sc) == "RUNNING":
+                break
+            time.sleep(0.4)
+        if _svc_state(sc) == "RUNNING":
+            break
+        time.sleep(1)
+
+    res["service"] = _svc_state(sc) or "UNKNOWN"
+    if res["service"] != "RUNNING":
+        err("WebClient 服务没有运行（%s）" % res["service"])
+    try:
+        _, o, e = util.popen([sc, "qc", "WebClient"], timeout=15)
+        t = (o + e).upper()
+        for k in ("AUTO_START", "DEMAND_START", "DISABLED", "SYSTEM_START", "BOOT_START"):
+            if k in t:
+                res["start"] = k
+                break
+        if res["start"] != "AUTO_START":
+            err("WebClient 启动类型不是自动（%s）" % (res["start"] or "未知"))
+    except Exception as ex:
+        err("读取 WebClient 启动类型失败：%s" % ex)
+    try:
+        util.popen([sc, "start", "MRxDAV"], timeout=20)
+        res["mrxdav"] = _svc_state(sc, "MRxDAV") or "UNKNOWN"
+    except Exception:
+        pass
+
+    res["ok"] = (res["service"] == "RUNNING" and res["start"] == "AUTO_START"
+                 and res["basic"] == 2)
+    if res["service"] != "RUNNING" and res["feature"] == "Enabled":
+        res["restart"] = True
+    try:
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        tmp = out + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(res, f, ensure_ascii=False)
+        os.replace(tmp, out)
+    except OSError as ex:
+        add("write result failed: %s" % ex)
+    add("repair end ok=%s restart=%s service=%s start=%s basic=%s errors=%s" %
+        (res["ok"], res["restart"], res["service"], res["start"], res["basic"], res["errors"]))
+    if res["ok"] and not res["restart"]:
+        return 0
+    if res["restart"]:
+        return 3
+    return 2
 
 
 def _roots(agent):
@@ -268,10 +483,15 @@ class Drive:
             return False
         try:
             util.popen(["net", "start", "WebClient"], timeout=30)
-            _, out, err = util.popen(["sc", "query", "WebClient"], timeout=15)
-            return "RUNNING" in (out + err).upper()
+            for _ in range(12):
+                _, out, err = util.popen(["sc", "query", "WebClient"], timeout=15)
+                if "RUNNING" in (out + err).upper():
+                    time.sleep(0.8)
+                    return True
+                time.sleep(0.4)
         except Exception:
-            return False
+            pass
+        return False
 
     def _unmap(self, letter):
         try:
@@ -282,26 +502,26 @@ class Drive:
     def repair(self):
         if os.name != "nt":
             raise RuntimeError("一键修复仅支持 Windows")
-        tmp = util.path("tmp")
-        os.makedirs(tmp, exist_ok=True)
-        result = os.path.join(tmp, "repair-webdav.json")
-        logf = util.path("logs", "repair-webdav.log")
+        d = _repair_dir()
+        logf = os.path.join(d, "repair-webdav.log")
+        result = os.path.join(d, "repair-%s.json" % secrets.token_hex(6))
         try:
-            os.remove(result)
+            os.makedirs(d, exist_ok=True)
         except OSError:
             pass
-        body = REPAIR_PS.replace("__LOG__", _psq(logf)).replace("__RESULT__", _psq(result))
-        enc = base64.b64encode(body.encode("utf-16le")).decode("ascii")
-        cmd = LAUNCH_PS.replace("__CODE__", enc)
-        ps = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32",
-                          "WindowsPowerShell", "v1.0", "powershell.exe")
         try:
-            code, out, err = util.popen(
-                [ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", cmd],
-                timeout=180)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("修复等待超时。请确认是否在管理员授权窗口点击了“是”，然后重试")
-        text = (err or out or "").strip()
+            with open(logf, "a", encoding="utf-8") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + "parent: repair requested\n")
+        except OSError:
+            pass
+        exe = sys.executable
+        if getattr(sys, "frozen", False):
+            params = "--repair-webdav --repair-dir %s --repair-out %s" % (_q(d), _q(result))
+            cwd = os.path.dirname(exe)
+        else:
+            params = "-m storagebear --repair-webdav --repair-dir %s --repair-out %s" % (_q(d), _q(result))
+            cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        code, _ = _elevate(exe, params, cwd, 420)
         res = None
         try:
             with open(result, "r", encoding="utf-8-sig") as f:
@@ -309,30 +529,53 @@ class Drive:
             res = x if isinstance(x, dict) else None
         except Exception:
             res = None
-        if not res:
-            util.log("repair-webdav: code=%s %s" % (code, text))
-            low = text.lower()
-            if code == 1223 or "cancel" in low or "取消" in text or "拒绝" in text:
-                raise RuntimeError("已取消管理员授权。修复 Windows WebDAV 组件需要一次管理员权限，"
-                                   "请重试并在系统弹窗中选择“是”")
-            raise RuntimeError("自动修复没有完成，可能被安全软件拦截。请先重启电脑再试；"
-                               "仍失败时请查看日志中的 repair-webdav.log")
+        try:
+            os.remove(result)
+        except OSError:
+            pass
+        try:
+            shutil.copyfile(logf, util.path("logs", "repair-webdav.log"))
+        except (OSError, shutil.Error):
+            pass
+        v = _win_verify()
+        if code == -1223:
+            raise RuntimeError("已取消管理员授权。修复需要一次管理员权限，请重试并在系统弹窗中选择“是”。")
+        if code == -5:
+            raise RuntimeError("系统拒绝了管理员授权。请确认当前账号可以提升权限，或联系电脑管理员。")
+        if code == -2:
+            raise RuntimeError("找不到修复程序。请重新安装存储熊后再试。")
+        if code == -998:
+            raise RuntimeError("修复等待超时（7 分钟）。请检查任务栏是否有待处理的管理员授权窗口，处理后重试。")
+        if code < 0 and code not in (-999, -998):
+            raise RuntimeError("无法启动管理员修复进程（错误 %d）。请重启电脑后重试。" % abs(code))
+        if res is None:
+            if code == 3:
+                raise RuntimeError("WebDAV 组件已启用，但 Windows 需要重启后才会生效。请重启电脑，"
+                                   "再打开存储熊点击“挂载为网络盘”")
+            if v["ok"]:
+                util.log("repair-webdav: verified without result")
+                return {"repaired": True, "restart": False, "service": v["service"],
+                        "feature": "", "basic": v["basic"]}
+            raise RuntimeError("自动修复没有完成。\n" + _repair_msg(None, v, logf, code))
         errs = res.get("errors") or []
         if isinstance(errs, str):
             errs = [errs]
         errs = [str(x) for x in errs if str(x).strip()]
-        util.log("repair-webdav: ok=%s service=%s feature=%s basic=%s errors=%s" %
-                 (res.get("ok"), res.get("service"), res.get("feature"), res.get("basic"), errs))
+        util.log("repair-webdav: ok=%s service=%s start=%s feature=%s basic=%s errors=%s" %
+                 (res.get("ok"), res.get("service"), res.get("start"), res.get("feature"),
+                  res.get("basic"), errs))
         if res.get("ok"):
-            time.sleep(1)
             return {"repaired": True, "restart": bool(res.get("restart")),
                     "service": res.get("service") or "", "feature": res.get("feature") or "",
                     "basic": int(res.get("basic") or 0)}
+        if v["ok"]:
+            return {"repaired": True, "restart": bool(res.get("restart")),
+                    "service": v["service"], "feature": res.get("feature") or "",
+                    "basic": v["basic"]}
         if res.get("restart") or res.get("feature") == "EnablePending":
             raise RuntimeError("WebDAV 组件已启用，但 Windows 需要重启后才会生效。请重启电脑，"
                                "再打开存储熊点击“挂载为网络盘”")
-        msg = "；".join(errs) if errs else "WebClient 服务没有启动"
-        raise RuntimeError("修复没有完全成功：%s。请重启电脑后重试，或查看 repair-webdav.log" % msg)
+        raise RuntimeError("修复没有完全成功。\n" + _repair_msg(res, v, logf, code))
 
     def mounted(self):
         if os.name != "nt":
@@ -373,21 +616,24 @@ class Drive:
             raise RuntimeError("没有可用的盘符，请在「虚拟磁盘」页指定一个未被占用的盘符")
         dests = [info["url"], "\\\\127.0.0.1@%d\\%s" % (self.port, DAV.strip("/"))]
         errs = []
-        self._webclient()
-        for letter in letters:
-            self._unmap(letter)
-            for dest in dests:
-                code, out, err = util.popen(
-                    ["net", "use", letter + ":", dest, info["pass"], "/user:" + info["user"], "/persistent:no"],
-                    timeout=60)
-                if code == 0:
-                    c = util.config()
-                    c["drive_letter"] = letter + ":"
-                    util.save_json(util.path("config.json"), c)
-                    self.agent.cfg = c
-                    return self.info()
-                errs.append(_neterr(out, err, code))
+        for attempt in range(3):
+            self._webclient()
+            for letter in letters:
                 self._unmap(letter)
+                for dest in dests:
+                    code, out, err = util.popen(
+                        ["net", "use", letter + ":", dest, info["pass"], "/user:" + info["user"], "/persistent:no"],
+                        timeout=60)
+                    if code == 0:
+                        c = util.config()
+                        c["drive_letter"] = letter + ":"
+                        util.save_json(util.path("config.json"), c)
+                        self.agent.cfg = c
+                        return self.info()
+                    errs.append(_neterr(out, err, code))
+                    self._unmap(letter)
+            if attempt < 2:
+                time.sleep(2)
         raise RuntimeError("\n\n".join(x for i, x in enumerate(errs) if x and x not in errs[:i]))
 
     def unmount(self):

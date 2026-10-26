@@ -261,7 +261,6 @@ async function boot() {
   } else {
     showAuth("login");
   }
-  setTimeout(maybeAskAutoStart, 1000);
 }
 
 function showAuth(mode = "login") {
@@ -393,21 +392,22 @@ async function enterApp() {
   startPoll();
   const h = location.hash.replace(/^#\/?/, "");
   setView(PAGE[h] ? h : "dashboard");
+  setTimeout(maybeAskAutoStart, 1000);
 }
 
 function maybeAskAutoStart() {
   const info = st.info || {};
-  if (info.dev || info.platform !== "win32") return;
+  if (info.dev || info.platform !== "win32" || info.startHidden) return;
   try {
-    if (info.autoStart) { localStorage.setItem("sb.autostart.asked.v1", "1"); return; }
-    if (localStorage.getItem("sb.autostart.asked.v1")) return;
-    localStorage.setItem("sb.autostart.asked.v1", "1");
+    if (info.autoStart) { localStorage.setItem("sb.autostart.asked.v2", "1"); return; }
+    if (localStorage.getItem("sb.autostart.asked.v2")) return;
+    localStorage.setItem("sb.autostart.asked.v2", "1");
   } catch (_) { return; }
   openModal({
     title: "以后开机就自动运行？",
     sub: "只需设置一次，之后登录 Windows 时会安静地待在托盘里。",
     body: `<p class="confirm-text">开启后，存储熊会随 Windows 启动，让文件库、云端任务和虚拟磁盘更早恢复在线。启动时不会弹出主窗口，也不会自动修改你的文件。</p>
-      <div class="form-note mt12">可以随时在「设置与帮助 → 这台电脑」中关闭。安装或升级后只会询问一次。</div>`,
+      <div class="form-note mt12">会写入当前 Windows 用户的启动项，可在「任务管理器 → 启动应用」中看到「存储熊」或「StorageBear」；也可以随时在「设置与帮助 → 这台电脑」中关闭。安装或升级后只会询问一次。</div>`,
     foot: `<button class="btn btn-ghost" data-act="autostart-no">暂不开启</button><button class="btn btn-primary" data-act="autostart-yes">开机自动启动</button>`,
   });
 }
@@ -1233,7 +1233,7 @@ async function viewSettings() {
         <div class="card card-pad mb16">
           <div class="card-title-row"><div><h3>这台电脑</h3><p>设备名称用于区分多台电脑。</p></div><span class="tag">${e(info.platform || "")}</span></div>
           <form data-form="settings-name" class="row" style="align-items:flex-end"><div class="field" style="flex:1;margin:0"><label>电脑名称</label><input class="input" name="device_name" maxlength="60" value="${e(cfg.device_name || (s.device && s.device.name) || "")}" required></div><button class="btn btn-sm" type="submit">保存</button></form>
-          <div class="setting-row mt16"><div class="setting-info"><b>开机自动启动</b><p>${info.dev ? "开发模式下不修改系统自启动项。" : "登录系统后在托盘静默启动，让文件库与虚拟磁盘保持在线。"}</p></div><button class="switch ${auto ? "on" : ""}" data-act="settings-auto" aria-label="切换自动启动"></button></div>
+          <div class="setting-row mt16"><div class="setting-info"><b>开机自动启动</b><p>${info.dev ? "开发模式下不修改系统自启动项。" : "登录系统后在托盘静默启动。状态来自当前用户的 Windows 启动项，可在任务管理器 → 启动应用中核对。"}</p></div><button class="switch ${auto ? "on" : ""}" data-act="settings-auto" aria-label="切换自动启动"></button></div>
           <div class="setting-row"><div class="setting-info"><b>本机数据目录</b><p class="mono tiny">${e(info.dataDir || "")}</p></div><div class="row"><button class="btn btn-sm btn-ghost" data-act="open-data">打开</button><button class="btn btn-sm btn-ghost" data-act="open-logs">日志</button></div></div>
         </div>
         <div class="card card-pad">
@@ -1487,7 +1487,7 @@ function mountHelp(err) {
 async function repairDrive() {
   const m = openModal({
     title: "正在一键修复 WebDAV",
-    sub: "Windows 会弹出一次管理员授权窗口，请点击「是」。",
+    sub: "Windows 会弹出一次管理员授权窗口，请点击「是」。没看到时请检查任务栏。",
     body: `<div class="row" style="align-items:center;gap:10px">${spinner()}<b>正在启用 WebDAV 客户端并重启 WebClient 服务…</b></div>
       <div class="form-note mt16">通常需要十几秒，请不要关闭存储熊。修复完成后会自动重新挂载；若系统提示需要重启，请重启电脑后再挂载。</div>`,
   });
@@ -1506,19 +1506,21 @@ async function repairDrive() {
       return;
     }
     toast("WebDAV 组件已修复，正在重新挂载", "ok");
+    await sleep(1200);
     await doDrive("mount");
   } catch (err) {
     m.close();
+    const detail = errMsg(err);
     openModal({
       title: "一键修复没有完成",
       sub: "不用敲命令，可以按下面的顺序再试。",
-      body: `<p class="confirm-text">${e(errMsg(err))}</p>
+      body: `<p class="confirm-text">${e(detail)}</p>
         <ol class="mount-steps mt12">
           <li>如果刚刚关掉了管理员授权弹窗，请再点一次修复，并在系统弹窗中选择「是」。</li>
-          <li>如果安全软件拦截了 PowerShell，请暂时允许，或重启电脑后重试。</li>
-          <li>仍然失败时，打开日志目录，把 <code>repair-webdav.log</code> 发给部署者。</li>
+          <li>如果安全软件拦截了修复程序，请暂时允许，或重启电脑后重试。</li>
+          <li>仍然失败时，点「复制诊断」把信息发给部署者，或打开日志目录查看 <code>repair-webdav.log</code>。</li>
         </ol>`,
-      foot: `<button class="btn btn-ghost" data-act="open-logs">打开日志</button><button class="btn btn-primary" data-act="drive-repair">再试一次</button>`,
+      foot: `<button class="btn btn-ghost" data-act="open-logs">打开日志</button><button class="btn btn-ghost" data-copy="${e(detail)}" data-label="诊断信息">复制诊断</button><button class="btn btn-primary" data-act="drive-repair">再试一次</button>`,
     });
   }
 }
@@ -1801,10 +1803,16 @@ document.addEventListener("click", async (ev) => {
         st.cfg = await api.saveConfig({ exts: common }); await refreshAll(); await render(); toast("已恢复默认扩展名", "ok");
       } else if (act === "settings-auto") {
         if (st.info && st.info.dev) { toast("开发模式下不修改系统自启动项", "info"); return; }
-        const on = await api.setAutoStart(!(st.info && st.info.autoStart));
-        if (st.info) st.info.autoStart = on;
-        await render();
-        toast(on ? "已开启开机启动" : "已关闭开机启动", "ok");
+        try {
+          const want = !(st.info && st.info.autoStart);
+          const on = await api.setAutoStart(want);
+          if (st.info) st.info.autoStart = on;
+          await render();
+          if (on !== want) toast(want ? "Windows 没有接受自启动设置，请检查安全软件" : "未能关闭自启动，请到任务管理器核对", "error");
+          else toast(on ? "已开启开机启动" : "已关闭开机启动", "ok");
+        } catch (err) {
+          toast(errMsg(err), "error", "设置失败");
+        }
       } else if (act === "autostart-yes") {
         closeModalEl(el);
         try {

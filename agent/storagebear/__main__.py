@@ -41,10 +41,16 @@ def main(argv=None):
                     help="本地 API 端口，0 为自动")
     ap.add_argument("--home", default="", help="数据目录")
     ap.add_argument("--version", action="store_true")
+    ap.add_argument("--repair-webdav", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--repair-dir", default="", help=argparse.SUPPRESS)
+    ap.add_argument("--repair-out", default="", help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
     if a.version:
         print(VERSION)
         return 0
+    if a.repair_webdav:
+        from .drive import repair_child
+        return repair_child(a.repair_dir, a.repair_out)
     if a.home:
         os.environ["SB_HOME"] = os.path.abspath(a.home)
     util.ensure()

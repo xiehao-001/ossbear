@@ -20,5 +20,9 @@
 !macroend
 
 !macro customUnInstall
+  DeleteRegValue HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Run" "StorageBear"
+  DeleteRegValue HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Run" "存储熊"
+  DeleteRegValue HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "StorageBear"
+  DeleteRegValue HKCU "SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "存储熊"
   DetailPrint "保留用户账号、索引与云端日志；如需彻底清除，请手动删除 %APPDATA%\\StorageBear。"
 !macroend
