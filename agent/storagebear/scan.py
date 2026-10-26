@@ -10,7 +10,8 @@ SKIP = {
     "programdata", "appdata", "node_modules", ".git", "__pycache__", "$winreagent", "recovery",
     "perflogs", "config.msi", ".cache", ".local", "library", "proc", "sys", "dev", "run",
 }
-DEFAULT_EXT = [".pdf", ".mp3", ".mp4", ".m4a", ".wav", ".flac", ".mkv", ".avi", ".mov", ".webm"]
+DEFAULT_EXT = ([".pdf", ".mp3", ".mp4", ".m4a", ".wav", ".flac", ".mkv", ".avi", ".mov", ".webm"]
+               + util.OFFICE_EXT + util.ARCHIVE_EXT)
 
 
 def _label(p):
@@ -50,7 +51,7 @@ def roots(agent, full=False, extra=None):
 def _exts(agent, extra=None):
     cfg = util.config()
     xs = extra if isinstance(extra, list) and extra else cfg.get("exts") or DEFAULT_EXT
-    out = set()
+    out = set(util.ARCHIVE_EXT)
     for x in xs:
         x = str(x).lower().strip()
         if x and not x.startswith("."):

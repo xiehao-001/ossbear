@@ -1,7 +1,9 @@
+import base64
 import hashlib
 import json
 import mimetypes
 import os
+import re
 import secrets
 import time
 
@@ -10,6 +12,10 @@ from .s3 import S3, S3Error
 
 LINK_TTL = 6 * 86400
 MANIFEST = "_storagebear/logs/%s.jsonl"
+VIEW_MAX = 40 * 1024 * 1024
+EDIT_MAX = 200 * 1024 * 1024
+VIEW_EXT = {".docx", ".xlsx", ".pptx"}
+LEGACY_EXT = {".doc", ".xls", ".ppt"}
 
 
 def _err(e):
@@ -346,6 +352,265 @@ def resolve(agent, path):
     agent.db.cloud(p, pid, r["object_key"], "", 0, 0)
     _rcloud(agent, p, pid, r["object_key"], "", 0, False)
     return p
+
+
+def downloads(agent):
+    d = util.downloads()
+    if not os.path.isdir(d):
+        raise RuntimeError("没有找到下载目录")
+    try:
+        entries = list(os.scandir(d))
+    except PermissionError:
+        raise RuntimeError("没有权限读取下载目录")
+    out = []
+    for e in entries:
+        try:
+            if not e.is_file(follow_symlinks=False):
+                continue
+            ext = util.ext(e.name)
+            if ext not in util.ARCHIVE_EXT:
+                continue
+            st = e.stat()
+            p = util.native(e.path)
+            r = agent.db.file(p)
+            out.append({"name": e.name, "path": p, "ext": ext, "size": int(st.st_size),
+                        "size_h": util.fmt_size(st.st_size), "mtime": int(st.st_mtime),
+                        "indexed": bool(r), "has_cloud": bool(r and r.get("object_key")),
+                        "archived": bool(r and r.get("archived") and r.get("object_key"))})
+        except OSError:
+            continue
+    out.sort(key=lambda x: x["mtime"], reverse=True)
+    total = len(out)
+    return {"path": d, "archives": out[:200], "total": total,
+            "bytes": sum(x["size"] for x in out)}
+
+
+def viewlink(agent, path):
+    p = util.native(path)
+    r = agent.db.file(p)
+    if not (r and r.get("object_key") and _ok(agent, r.get("provider_id"))):
+        if os.path.isfile(p):
+            return {"mode": "local", "path": p}
+        raise RuntimeError("文件不在本机，也没有可用的云端副本")
+    url = _s3(agent, r["provider_id"]).presign(
+        r["object_key"], 1800, disposition="inline", ctype=_mime(p))
+    return {"mode": "url", "url": url, "expires_at": util.now() + 1800,
+            "provider_id": r["provider_id"], "name": os.path.basename(p), "ext": util.ext(p)}
+
+
+def openable(agent, path):
+    p = util.native(path)
+    if os.path.isfile(p):
+        return p
+    r = agent.db.file(p)
+    if not (r and r.get("object_key")):
+        raise RuntimeError("本地与云端索引中都没有该文件")
+    if not _ok(agent, r.get("provider_id")):
+        raise RuntimeError("文件在云端，但对应云存储密钥不可用")
+    d = util.path("tmp", "open")
+    os.makedirs(d, exist_ok=True)
+    now = util.now()
+    try:
+        for fn in os.listdir(d):
+            q = os.path.join(d, fn)
+            if os.path.isfile(q) and now - os.path.getmtime(q) > 2 * 86400:
+                os.remove(q)
+    except OSError:
+        pass
+    h = hashlib.sha1(util.pkey(p).encode("utf-8")).hexdigest()[:12]
+    q = os.path.join(d, "%s-%s" % (h, util.safe_name(os.path.basename(p), 100)))
+    _s3(agent, r["provider_id"]).download(r["object_key"], q)
+    util.log("open temp: %s -> %s" % (p, q))
+    return q
+
+
+def _view_ext(path):
+    ext = util.ext(path)
+    if ext in LEGACY_EXT:
+        raise RuntimeError("旧版 Office 格式（doc / xls / ppt）暂不支持预览，请用本机 Office 打开")
+    if ext not in VIEW_EXT:
+        raise RuntimeError("该格式暂不支持预览")
+    return ext
+
+
+def _sha(path):
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(1024 * 1024)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def _edit_state(path):
+    d = util.path("tmp", "edit")
+    os.makedirs(d, exist_ok=True)
+    now = util.now()
+    try:
+        for fn in os.listdir(d):
+            q = os.path.join(d, fn)
+            try:
+                if os.path.isfile(q) and now - os.path.getmtime(q) > 2 * 86400:
+                    os.remove(q)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    h = hashlib.sha1(util.pkey(path).encode("utf-8")).hexdigest()[:12]
+    return d, h, os.path.join(d, h + ".json")
+
+
+def preview(agent, path):
+    p = util.native(path)
+    ext = _view_ext(p)
+    r = agent.db.file(p)
+    local = os.path.isfile(p)
+    cloud = bool(r and r.get("object_key") and _ok(agent, r.get("provider_id")))
+    if local:
+        size = os.path.getsize(p)
+        if size > VIEW_MAX:
+            raise RuntimeError("文件约 %s，超过 40MB 预览上限；可改用本机 Office 打开" % util.fmt_size(size))
+        with open(p, "rb") as f:
+            raw = f.read()
+        source = "local"
+        pid = (r or {}).get("provider_id") or ""
+        key = (r or {}).get("object_key") or ""
+    elif cloud:
+        s3 = _s3(agent, r["provider_id"])
+        size = int(r.get("size") or 0)
+        try:
+            hd = s3.head(r["object_key"])
+            size = int(hd.get("Content-Length") or hd.get("content-length") or size)
+        except Exception:
+            pass
+        if size > VIEW_MAX:
+            raise RuntimeError("文件约 %s，超过 40MB 预览上限；可改用本机 Office 打开" % util.fmt_size(size))
+        raw = s3.get_bytes(r["object_key"], VIEW_MAX + 1)
+        if len(raw) > VIEW_MAX:
+            raise RuntimeError("文件超过 40MB 预览上限；可改用本机 Office 打开")
+        size = len(raw)
+        source = "cloud"
+        pid = r["provider_id"]
+        key = r["object_key"]
+    else:
+        raise RuntimeError("本地与云端都没有该文件")
+    return {"name": os.path.basename(p), "path": p, "ext": ext, "size": int(size),
+            "size_h": util.fmt_size(size), "source": source, "provider_id": pid,
+            "provider_label": (agent.db.prov(pid) or {}).get("label") or "" if pid else "",
+            "has_cloud": bool(key), "data": base64.b64encode(raw).decode("ascii")}
+
+
+def editfile(agent, path):
+    p = util.native(path)
+    ext = _view_ext(p)
+    r = agent.db.file(p) or {}
+    d, h, stp = _edit_state(p)
+    work = os.path.join(d, h + "-" + util.safe_name(os.path.basename(p), 100))
+    if os.path.isfile(p):
+        work = p
+        source = "local"
+    elif r.get("object_key") and _ok(agent, r.get("provider_id")):
+        s3 = _s3(agent, r["provider_id"])
+        size = int(r.get("size") or 0)
+        try:
+            hd = s3.head(r["object_key"])
+            size = int(hd.get("Content-Length") or hd.get("content-length") or size)
+        except Exception:
+            pass
+        if size > EDIT_MAX:
+            raise RuntimeError("文件约 %s，超过 200MB 本机编辑上限" % util.fmt_size(size))
+        s3.download(r["object_key"], work)
+        source = "cloud"
+    else:
+        raise RuntimeError("本地与云端都没有该文件")
+    snap = {"orig": p, "work": work, "source": source, "sha1": _sha(work),
+            "size": os.path.getsize(work), "mtime": int(os.path.getmtime(work)),
+            "provider_id": r.get("provider_id") or "", "object_key": r.get("object_key") or "",
+            "archived": int(r.get("archived") or 0), "created_at": util.now()}
+    util.save_json(stp, snap)
+    util.openpath(work)
+    util.log("edit open: %s -> %s" % (p, work))
+    return {"path": work, "orig": p, "source": source, "name": os.path.basename(p), "ext": ext,
+            "size": snap["size"], "size_h": util.fmt_size(snap["size"]), "opened": True}
+
+
+def _vkey(p, old_key):
+    base = old_key or key(p)
+    root, ext = os.path.splitext(base)
+    root = re.sub(r"(?:-v\d{14}-[0-9a-f]{6})+$", "", root)
+    return "%s-v%s-%s%s" % (root, time.strftime("%Y%m%d%H%M%S"), secrets.token_hex(3),
+                            ext or util.ext(p))
+
+
+def saveedit(agent, path):
+    p = util.native(path)
+    ext = _view_ext(p)
+    d, h, stp = _edit_state(p)
+    snap = util.load_json(stp, None)
+    if not snap or util.pkey(snap.get("orig") or "") != util.pkey(p):
+        raise RuntimeError("没有找到编辑记录，请先从预览窗口点击「用本机 Office 编辑」")
+    work = util.native(snap.get("work") or "")
+    if not os.path.isfile(work):
+        raise RuntimeError("编辑临时文件已不存在，请重新打开")
+    digest = _sha(work)
+    if digest == snap.get("sha1"):
+        return {"changed": False, "uploaded": False, "path": p,
+                "message": "未检测到修改。请在本机 Office 中保存文件后再点「完成并上传」。"}
+    size = os.path.getsize(work)
+    if size <= 0:
+        raise RuntimeError("文件内容为空，已取消上传")
+    r = agent.db.file(p) or {}
+    old_key = r.get("object_key") or snap.get("object_key") or ""
+    old_pid = r.get("provider_id") or snap.get("provider_id") or ""
+    has_cloud = bool(old_key and _ok(agent, old_pid))
+    mtime = int(os.path.getmtime(work))
+    if snap.get("source") == "local" and not has_cloud:
+        agent.db.put([{"path": p, "parent": os.path.dirname(p), "name": os.path.basename(p),
+                       "is_dir": False, "size": size, "ext": ext, "kind": util.kind(ext),
+                       "mtime": mtime}])
+        snap.update({"sha1": digest, "size": size, "mtime": mtime, "saved_at": util.now()})
+        util.save_json(stp, snap)
+        return {"changed": True, "uploaded": False, "path": p, "size": size,
+                "size_h": util.fmt_size(size), "message": "本机文件已保存；该文件尚未迁出到云端。"}
+    pid = old_pid if has_cloud else pick(agent, {})
+    s3 = _s3(agent, pid)
+    new_key = _vkey(p, old_key if pid == old_pid else "")
+    s3.put_file(new_key, work, _mime(p))
+    arch = 1 if not os.path.isfile(p) else 0
+    agent.db.put([{"path": p, "parent": os.path.dirname(p), "name": os.path.basename(p),
+                   "is_dir": False, "size": size, "ext": ext, "kind": util.kind(ext),
+                   "mtime": mtime}])
+    agent.db.cloud(p, pid, new_key, "", 0, arch)
+    old_del = ""
+    if old_key and old_key != new_key:
+        if old_pid and _ok(agent, old_pid):
+            try:
+                _s3(agent, old_pid).delete(old_key)
+            except Exception as e:
+                old_del = _err(e)
+        else:
+            old_del = "原云存储密钥不可用，旧对象未删除"
+    lid = "sv" + secrets.token_hex(8)
+    detail = {"path": p, "provider_id": pid, "old_provider_id": old_pid, "old_key": old_key,
+              "new_key": new_key, "size": size, "bytes": size, "source": snap.get("source"),
+              "edited_at": util.now()}
+    if old_del:
+        detail["old_delete_error"] = old_del
+    agent.db.log(lid, pid, "save", 1, detail)
+    snap.update({"sha1": digest, "size": size, "mtime": mtime, "provider_id": pid,
+                 "object_key": new_key, "archived": arch, "saved_at": util.now()})
+    try:
+        util.save_json(stp, snap)
+    except Exception as e:
+        util.log("edit state: %s" % e)
+    util.log("edit save: %s -> %s" % (p, new_key))
+    return {"changed": True, "uploaded": True, "path": p, "provider_id": pid,
+            "provider_label": (agent.db.prov(pid) or {}).get("label") or "",
+            "key": new_key, "old_key": old_key, "size": size, "size_h": util.fmt_size(size),
+            "log_id": lid, "delete_error": old_del,
+            "message": "已上传新版本并更新云端记录" + ("；旧对象删除失败" if old_del else "")}
 
 
 def serve(agent, t):

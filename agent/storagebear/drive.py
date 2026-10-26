@@ -482,11 +482,12 @@ class Drive:
         if os.name != "nt":
             return False
         try:
+            util.popen(["sc", "start", "MRxDAV"], timeout=20)
             util.popen(["net", "start", "WebClient"], timeout=30)
-            for _ in range(12):
+            for _ in range(15):
                 _, out, err = util.popen(["sc", "query", "WebClient"], timeout=15)
                 if "RUNNING" in (out + err).upper():
-                    time.sleep(0.8)
+                    time.sleep(1.2)
                     return True
                 time.sleep(0.4)
         except Exception:
@@ -498,6 +499,25 @@ class Drive:
             util.popen(["net", "use", letter + ":", "/delete", "/y"], timeout=30)
         except Exception:
             pass
+
+    def _clean(self):
+        if os.name != "nt":
+            return
+        try:
+            _, out, err = util.popen(["net", "use"], timeout=20)
+        except Exception:
+            return
+        port = ":%d" % int(self.port or 0)
+        for line in (out + "\n" + err).splitlines():
+            low = line.lower()
+            if "127.0.0.1" not in low:
+                continue
+            if port not in low and "dav" not in low:
+                continue
+            m = re.search(r"\b([A-Za-z]):\s", line)
+            if m:
+                util.log("dav: cleanup stale %s: %s" % (m.group(1).upper(), line.strip()[:160]))
+                self._unmap(m.group(1).upper())
 
     def repair(self):
         if os.name != "nt":
@@ -616,8 +636,11 @@ class Drive:
             raise RuntimeError("没有可用的盘符，请在「虚拟磁盘」页指定一个未被占用的盘符")
         dests = [info["url"], "\\\\127.0.0.1@%d\\%s" % (self.port, DAV.strip("/"))]
         errs = []
-        for attempt in range(3):
-            self._webclient()
+        for attempt in range(4):
+            ready = self._webclient()
+            if not ready:
+                errs.append("WebClient 服务没有进入运行状态。请点「一键修复 WebDAV」后重试。")
+            self._clean()
             for letter in letters:
                 self._unmap(letter)
                 for dest in dests:
@@ -629,11 +652,14 @@ class Drive:
                         c["drive_letter"] = letter + ":"
                         util.save_json(util.path("config.json"), c)
                         self.agent.cfg = c
+                        util.log("dav: mounted %s -> %s" % (letter + ":", dest))
                         return self.info()
-                    errs.append(_neterr(out, err, code))
+                    msg = _neterr(out, err, code)
+                    errs.append(msg)
+                    util.log("dav: mount attempt %d %s %s -> %s" % (attempt + 1, letter + ":", dest, msg.replace("\n", " ")[:300]))
                     self._unmap(letter)
-            if attempt < 2:
-                time.sleep(2)
+            if attempt < 3:
+                time.sleep(2.5)
         raise RuntimeError("\n\n".join(x for i, x in enumerate(errs) if x and x not in errs[:i]))
 
     def unmount(self):

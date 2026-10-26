@@ -237,16 +237,39 @@ class Agent:
             return {"path": q}
         return self.jobs.add("fetch", fn)
 
+    def link(self, path):
+        if not str(path or "").strip():
+            raise RuntimeError("缺少文件路径")
+        return ops.viewlink(self, path)
+
+    def downloads(self):
+        return ops.downloads(self)
+
+    def preview(self, path):
+        if not str(path or "").strip():
+            raise RuntimeError("缺少文件路径")
+        return ops.preview(self, path)
+
+    def edit(self, path):
+        if not str(path or "").strip():
+            raise RuntimeError("缺少文件路径")
+        return ops.editfile(self, path)
+
+    def saveEdit(self, path):
+        if not str(path or "").strip():
+            raise RuntimeError("缺少文件路径")
+        return ops.saveedit(self, path)
+
     def open(self, path):
         if not str(path or "").strip():
             raise RuntimeError("缺少文件路径")
         p = util.native(path)
 
         def fn(job):
-            q = ops.resolve(self, p)
-            job.up(message="正在打开")
+            job.up(message="正在打开文件")
+            q = ops.openable(self, p)
             util.openpath(q)
-            return {"path": q}
+            return {"path": q, "temporary": q != p}
         return self.jobs.add("open", fn)
 
     def reveal(self, path):

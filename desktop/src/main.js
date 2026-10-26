@@ -17,6 +17,8 @@ try { app.setPath("userData", DATA); } catch (_) {}
 fs.mkdirSync(path.join(DATA, "agent", "logs"), { recursive: true });
 
 let win = null;
+let previewWin = null;
+let previewPath = "";
 let tray = null;
 let child = null;
 let quitting = false;
@@ -230,6 +232,28 @@ async function askManual(manual, message, detail) {
   await dialog.showMessageBox(win, { type: "info", title: "检查更新", message, detail, noLink: true });
 }
 
+function updateError(e) {
+  const raw = String((e && e.message) || e || "");
+  const low = raw.toLowerCase();
+  const status = Number((e && (e.statusCode || (e.response && e.response.statusCode))) || 0);
+  const head = raw.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)[0] || "未知错误";
+  let msg;
+  if (status === 404 || /\b404\b|not found/.test(low)) {
+    msg = "更新发布页暂时不可用（HTTP 404）。当前版本可以正常使用，这通常表示发布仓库还没有公开或尚未上传安装包。";
+  } else if (/enotfound|eai_again|getaddrinfo/.test(low)) {
+    msg = "无法解析更新服务器地址。请检查网络或稍后再试。";
+  } else if (/etimedout|timeout|econnreset|econnrefused|socket hang up/.test(low)) {
+    msg = "连接更新服务器超时。请检查网络、代理或安全软件后重试。";
+  } else {
+    msg = "暂时无法检查更新。当前版本可以正常使用。";
+  }
+  const tech = head.length > 120 ? head.slice(0, 120) + "…" : head;
+  return {
+    msg,
+    detail: "当前版本 " + app.getVersion() + "。\n需要新版本安装包时，请联系部署者获取；也可以先继续使用当前版本。\n\n错误摘要：" + tech,
+  };
+}
+
 async function checkUpdate(manual) {
   if (!updaterReady()) {
     await askManual(manual, DEV ? "开发模式不检查更新" : "更新组件不可用", DEV ? "打包后的 Windows 客户端会从 GitHub Releases 检查更新。" : "当前安装可能缺少更新组件，请重新安装。");
@@ -253,7 +277,8 @@ async function checkUpdate(manual) {
     updateLog("error", e);
     if (manualCheck) {
       manualCheck = false;
-      await askManual(true, "暂时无法检查更新", "请稍后再试，或确认网络可以访问 GitHub Releases。\n\n" + e.message);
+      const u = updateError(e);
+      await askManual(true, "暂时无法检查更新", u.detail ? u.msg + "\n\n" + u.detail : u.msg);
     }
     return false;
   } finally {
@@ -349,6 +374,11 @@ const calls = {
   archive: (a) => ({ route: "/api/archive", method: "POST", data: a }),
   restore: (a) => ({ route: "/api/restore", method: "POST", data: a }),
   share: (a) => ({ route: "/api/share", method: "POST", data: a }),
+  downloads: () => ({ route: "/api/downloads" }),
+  link: (a) => ({ route: "/api/link", method: "POST", data: a }),
+  preview: (a) => ({ route: "/api/preview", method: "POST", data: a, timeout: 180000 }),
+  edit: (a) => ({ route: "/api/edit", method: "POST", data: a, timeout: 300000 }),
+  saveEdit: (a) => ({ route: "/api/save-edit", method: "POST", data: a, timeout: 300000 }),
   open: (a) => ({ route: "/api/open", method: "POST", data: a }),
   fetch: (a) => ({ route: "/api/fetch", method: "POST", data: a }),
   reveal: (a) => ({ route: "/api/reveal", method: "POST", data: a }),
@@ -413,6 +443,57 @@ function createWindow() {
   win.webContents.on("before-input-event", (e, input) => {
     if (input.key === "F12" && DEV) win.webContents.toggleDevTools();
   });
+}
+
+function openPreviewWindow(file) {
+  previewPath = String(file || "");
+  if (!previewPath) return;
+  if (previewWin && !previewWin.isDestroyed()) {
+    if (previewWin.isMinimized()) previewWin.restore();
+    previewWin.show();
+    previewWin.focus();
+    previewWin.webContents.send("sb:preview-path", previewPath);
+    return;
+  }
+  previewWin = new BrowserWindow({
+    width: 1080,
+    height: 800,
+    minWidth: 860,
+    minHeight: 600,
+    show: false,
+    parent: win || undefined,
+    backgroundColor: "#EEF2F8",
+    title: "文档预览 · 存储熊",
+    icon: path.join(__dirname, "..", "assets", "icon.png"),
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preview-preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+    },
+  });
+  previewWin.loadFile(path.join(__dirname, "preview.html"));
+  previewWin.once("ready-to-show", () => previewWin.show());
+  previewWin.webContents.on("did-finish-load", () => {
+    if (previewPath) previewWin.webContents.send("sb:preview-path", previewPath);
+  });
+  previewWin.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  previewWin.webContents.on("will-navigate", (e, url) => {
+    if (!url.startsWith("file://")) {
+      e.preventDefault();
+      if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    }
+  });
+  previewWin.on("closed", () => { previewWin = null; });
+}
+
+function fromPreview(event) {
+  return !!previewWin && !previewWin.isDestroyed() && event.sender === previewWin.webContents;
 }
 
 async function driveAction(action) {
@@ -551,4 +632,34 @@ ipcMain.handle("sb:auto-start", (event, on) => {
   const frame = event.senderFrame && event.senderFrame.url;
   if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
   return autoStartSet(!!on);
+});
+
+ipcMain.handle("sb:preview-open", (event, file) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  openPreviewWindow(String(file || "").slice(0, 4096));
+  return true;
+});
+
+ipcMain.handle("sb:preview-data", async (event, file) => {
+  if (!fromPreview(event)) throw new Error("拒绝非法调用");
+  return local("/api/preview", "POST", { path: String(file || "").slice(0, 4096) }, 180000);
+});
+
+ipcMain.handle("sb:preview-edit", async (event, file) => {
+  if (!fromPreview(event)) throw new Error("拒绝非法调用");
+  return local("/api/edit", "POST", { path: String(file || "").slice(0, 4096) }, 300000);
+});
+
+ipcMain.handle("sb:preview-save", async (event, file) => {
+  if (!fromPreview(event)) throw new Error("拒绝非法调用");
+  const r = await local("/api/save-edit", "POST", { path: String(file || "").slice(0, 4096) }, 300000);
+  if (r && r.changed && win && !win.isDestroyed()) win.webContents.send("sb:files-changed");
+  return r;
+});
+
+ipcMain.handle("sb:preview-close", (event) => {
+  if (!fromPreview(event)) throw new Error("拒绝非法调用");
+  if (previewWin) previewWin.close();
+  return true;
 });

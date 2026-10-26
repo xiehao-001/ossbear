@@ -12,6 +12,9 @@ import time
 from . import VERSION
 
 APP = "StorageBear"
+ARCHIVE_EXT = [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst",
+               ".tgz", ".tbz2", ".txz", ".cab", ".iso"]
+OFFICE_EXT = [".docx", ".xlsx", ".pptx"]
 _lock = threading.Lock()
 
 
@@ -131,6 +134,8 @@ def kind(e):
         return "image"
     if e in (".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".md", ".json", ".csv"):
         return "doc"
+    if e in ARCHIVE_EXT:
+        return "archive"
     return "other"
 
 
@@ -245,6 +250,26 @@ def unprotect(text):
 def password(n=18):
     a = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     return "".join(secrets.choice(a) for _ in range(n))
+
+
+def downloads():
+    if os.name == "nt":
+        try:
+            import winreg
+            k = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                               r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders")
+            v = winreg.QueryValueEx(k, "{374DE290-123F-4565-9164-39C4925E467B}")[0]
+            winreg.CloseKey(k)
+            if v:
+                return native(os.path.expandvars(v))
+        except Exception:
+            pass
+    p = os.path.join(os.path.expanduser("~"), "Downloads")
+    if not os.path.isdir(p):
+        alt = os.path.join(os.path.expanduser("~"), "下载")
+        if os.path.isdir(alt):
+            p = alt
+    return native(p)
 
 
 def safe_name(name, limit=100):

@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld("sb", {
   archive: (a) => call("archive", a),
   restore: (a) => call("restore", a),
   share: (a) => call("share", a),
+  downloads: () => call("downloads"),
+  link: (path) => call("link", { path }),
+  preview: (path) => ipcRenderer.invoke("sb:preview-open", path),
   open: (path) => call("open", { path }),
   fetch: (path) => call("fetch", { path }),
   reveal: (path) => call("reveal", { path }),
@@ -48,4 +51,5 @@ contextBridge.exposeInMainWorld("sb", {
   openFolder: (kind) => ipcRenderer.invoke("sb:open-folder", kind),
   setAutoStart: (on) => ipcRenderer.invoke("sb:auto-start", on),
   onBackendExit: (fn) => ipcRenderer.on("sb:backend-exit", (e, code) => fn(code)),
+  onFilesChanged: (fn) => ipcRenderer.on("sb:files-changed", () => fn()),
 });

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-eval'; font-src 'self' data:; worker-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>文档预览 · 存储熊</title>
+  <link rel="stylesheet" href="preview.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="../assets/tray.png" alt=""><span>存储熊</span><i>文档预览</i></div>
+    <div class="file">
+      <b id="fname">正在准备…</b>
+      <span id="fmeta"></span>
+    </div>
+    <div class="acts">
+      <span class="badge hidden" id="badge"></span>
+      <button class="btn ghost" id="edit" disabled>用本机 Office 编辑</button>
+      <button class="btn primary hidden" id="save">完成并上传</button>
+      <button class="btn ghost" id="close">关闭</button>
+    </div>
+  </header>
+  <div class="tips" id="tips">
+    <span>预览在本机完成，不会产生“本地 + 云”副本。</span>
+    <span class="dot"></span>
+    <span>编辑后上传新对象，再删除旧对象；上传失败时旧对象保留。</span>
+  </div>
+  <main id="stage">
+    <div class="splash" id="splash">
+      <div class="spin"></div>
+      <b id="splash-title">正在读取文件…</b>
+      <p id="splash-text">大文件可能需要几秒钟</p>
+      <div class="e-actions" id="splash-acts"></div>
+    </div>
+    <div id="docx" class="host docx hidden"></div>
+    <div id="xlsx" class="host xlsx hidden">
+      <div class="tabs" id="sheets"></div>
+      <div class="sheet" id="sheet"></div>
+    </div>
+    <div id="pptx" class="host pptx hidden"></div>
+  </main>
+  <div class="toast" id="toast"></div>
+  <script src="vendor/jszip.min.js"></script>
+  <script src="vendor/docx-preview.min.js"></script>
+  <script src="vendor/xlsx.core.min.js"></script>
+  <script src="vendor/pptx-preview.js"></script>
+  <script src="preview.js"></script>
+</body>
+</html>

@@ -274,8 +274,18 @@ def _handler(agent, token):
                 return 200, {"job_id": a.restore(data)}
             if method == "POST" and path == "/api/share":
                 return 200, {"job_id": a.share(data.get("path", ""), data.get("provider_id", ""))}
+            if method == "GET" and path == "/api/downloads":
+                return 200, a.downloads()
+            if method == "POST" and path == "/api/link":
+                return 200, a.link(data.get("path", ""))
             if method == "POST" and path == "/api/open":
                 return 200, {"job_id": a.open(data.get("path", ""))}
+            if method == "POST" and path == "/api/preview":
+                return 200, a.preview(data.get("path", ""))
+            if method == "POST" and path == "/api/edit":
+                return 200, a.edit(data.get("path", ""))
+            if method == "POST" and path == "/api/save-edit":
+                return 200, a.saveEdit(data.get("path", ""))
             if method == "POST" and path == "/api/fetch":
                 return 200, {"job_id": a.fetch(data.get("path", ""))}
             if method == "POST" and path == "/api/reveal":

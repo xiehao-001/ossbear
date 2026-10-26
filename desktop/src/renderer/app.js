@@ -25,7 +25,7 @@ const PAGE = {
   phone: ["手机访问", "正在开发"],
   settings: ["设置与帮助", "本机与账号"],
 };
-const OPLABEL = { archive: "迁出到云", restore: "迁回本地", log_upload: "上传日志", verify: "校验" };
+const OPLABEL = { archive: "迁出到云", restore: "迁回本地", save: "编辑回传", log_upload: "上传日志", verify: "校验" };
 const IC = {
   warn: '<svg viewBox="0 0 24 24"><path d="M12 3 2.7 19a1.4 1.4 0 0 0 1.2 2h16.2a1.4 1.4 0 0 0 1.2-2z"/><path d="M12 9v5M12 17.5v.5"/></svg>',
   folder: '<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
@@ -61,7 +61,7 @@ const IC = {
 const st = {
   info: null, status: null, cfg: null, providers: [], stitches: [], devices: [],
   view: "dashboard", path: "", parent: "", q: "", filter: "all", provider: "", sel: new Set(),
-  entries: [], recent: [], logs: [], logRemote: [], drive: null, pick: [],
+  entries: [], recent: [], logs: [], logRemote: [], drive: null, pick: [], dl: [],
   renderSeq: 0, poll: null, autoStart: false,
 };
 let codeTimer = null;
@@ -537,7 +537,7 @@ async function viewDash() {
     </div>
     <div>
       <section class="section">
-        <div class="sec-head"><div><h3>最近日志</h3><p>迁出、迁回与日志上传记录。</p></div><button class="btn btn-sm btn-ghost" data-act="nav" data-view="transfer">查看</button></div>
+        <div class="sec-head"><div><h3>最近日志</h3><p>迁出、迁回、编辑回传与日志上传记录。</p></div><button class="btn btn-sm btn-ghost" data-act="nav" data-view="transfer">查看</button></div>
         <div class="card card-pad">${logs.length ? `<div class="steps">${logs.map((l) => `<div class="row-between" style="padding:8px 0;border-bottom:1px dashed var(--line)"><div><b style="font-size:12px">${e(OPLABEL[l.op] || l.op)}</b><span class="faint tiny" style="display:block;margin-top:2px">${fmtTime(l.created_at)} · ${l.count} 个文件</span></div><span class="tag">${e(providerLabel(l.provider_id))}</span></div>`).join("")}</div>` : `<div class="empty" style="padding:24px 8px"><b>还没有迁移记录</b><p>把文件迁出云端后，日志会出现在这里。</p></div>`}</div>
       </section>
       <section class="section">
@@ -589,7 +589,7 @@ async function viewFiles() {
   return `<div class="view-inner">
   ${banner()}
   <div class="sec-head"><div><h3>${st.q ? "搜索结果" : st.path ? "磁盘目录" : "文件库"}</h3><p>${st.q ? `“${e(st.q)}” 的结果` : st.path ? e(st.path) : "索引中的 PDF、音频、视频，以及迁出到云端的副本。"}</p></div>
-    <div class="row"><button class="btn btn-ghost" data-act="files-browse">${IC.folder} 浏览磁盘</button><button class="btn btn-primary" data-act="scan-modal">${IC.scan} 扫描</button></div></div>
+    <div class="row"><button class="btn btn-ghost" data-act="downloads-archives">${IC.upload} 下载目录压缩包</button><button class="btn btn-ghost" data-act="files-browse">${IC.folder} 浏览磁盘</button><button class="btn btn-primary" data-act="scan-modal">${IC.scan} 扫描</button></div></div>
   <div class="table-wrap">
     <div class="toolbar">
       <form data-form="files-search" style="display:flex;gap:7px;flex:1;max-width:420px">
@@ -606,7 +606,7 @@ async function viewFiles() {
     <div id="selbar" class="selbar ${selCount ? "" : "hidden"}"><b><span data-cnt>${selCount}</span> 个文件已选择</b><div class="spacer"></div><button class="btn btn-sm btn-ghost" data-act="sel-clear">清除</button><button class="btn btn-sm btn-primary" data-act="${st.filter === "cloud" ? "sel-restore" : "sel-archive"}">${st.filter === "cloud" ? IC.download + " 迁回所选" : IC.upload + " 迁出所选"}</button></div>
     ${entries.length ? `<table class="tbl"><thead><tr><th class="col-check"><input type="checkbox" class="check" id="sel-all" title="全选当前列表"></th><th>名称与位置</th><th class="col-size">大小</th><th class="col-badge">状态</th><th class="col-acts"></th></tr></thead><tbody>${entries.map(rowHtml).join("")}</tbody></table>` : emptyFiles(mode)}
   </div>
-  <p class="small faint mt12">提示：扫描只收录设置中的扩展名；目录不会被迁出，迁出目录时只处理其中的已索引文件。虚拟盘是只读镜像，不会改动原文件。</p>
+  <p class="small faint mt12">提示：扫描只收录设置中的扩展名，压缩包（zip / rar / 7z 等）会一并收录；目录不会被迁出，迁出目录时只处理其中的已索引文件。虚拟盘是只读镜像，不会改动原文件。</p>
 </div>`;
 }
 function rowHtml(x) {
@@ -1013,6 +1013,75 @@ function archiveModal(paths) {
   });
 }
 
+async function downloadsArchives() {
+  let r;
+  try { r = await api.downloads(); } catch (err) { toast(errMsg(err), "error", "无法读取下载目录"); return; }
+  st.dl = r.archives || [];
+  const usable = st.providers.filter((p) => p.enabled && p.endpoint && p.bucket && p.has_key);
+  if (!usable.length) {
+    openModal({
+      title: "还不能上传压缩包",
+      body: `<div class="empty" style="padding:16px 8px"><div class="e-ic">${IC.cloud}</div><b>先接入一个可用的云存储</b><p>上传需要填写 AccessKey、SecretKey、Bucket 与 Endpoint。密钥仅保存在本机。</p></div>`,
+      foot: `<button class="btn btn-ghost" data-act="close-modal">取消</button><button class="btn btn-primary" data-act="provider-add">添加云存储</button>`,
+    });
+    return;
+  }
+  const pending = st.dl.filter((x) => !x.archived);
+  if (!pending.length) {
+    openModal({
+      title: "下载目录里的压缩包已处理",
+      sub: `目录：${e(r.path || "")}`,
+      body: `<div class="empty" style="padding:18px 8px"><div class="e-ic">${IC.upload}</div><b>没有待上传的压缩包</b><p>这里只列出下载目录第一层的 zip、rar、7z、tar、gz 等压缩包。已经迁出到云端的文件会单独标记。</p></div>`,
+      foot: `<button class="btn btn-primary" data-act="close-modal">知道了</button>`,
+    });
+    return;
+  }
+  const rows = st.dl.map((x, i) => `<label class="opt-line" style="display:flex;align-items:center;gap:9px;padding:7px 4px;border-bottom:1px solid #f1f3f9">
+      <input type="checkbox" name="arch" value="${i}" ${x.archived ? "disabled" : "checked"}>
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis" title="${e(x.name)}">${e(x.name)}</span>
+      <span class="tag">${e(x.size_h)}</span>${x.archived ? '<span class="tag green">已在云端</span>' : x.has_cloud ? '<span class="tag amber">已有关联</span>' : ""}
+    </label>`).join("");
+  const total = pending.reduce((a, x) => a + Number(x.size || 0), 0);
+  const dest = localStorage.getItem("sb.dest") || usable[0].id;
+  openModal({
+    title: "上传下载目录中的压缩包",
+    sub: `下载目录：${r.path || ""}　共 ${pending.length} 个待上传，${fmtSize(total)}。`,
+    wide: true,
+    body: `<form id="dlForm" data-form="downloads">
+      <div class="field"><label>选择压缩包 <small>只读取下载目录第一层；暂不提供在线解压</small></label>
+        <div style="max-height:270px;overflow:auto;border:1px solid var(--line);border-radius:9px;padding:4px 10px">${rows}</div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label>上传到</label><select class="input" name="dest">${destOptions(dest)}</select></div>
+        <div class="field"><label>本机处理</label><label class="opt-line" style="height:39px"><input type="checkbox" name="move" checked> 上传成功后删除下载目录中的原文件</label></div>
+      </div>
+      <div class="alert alert-warn">${IC.warn}<div><b>压缩包按原文件上传，不会在云端解压。</b>勾选删除后，本机只保留索引映射，需要时可通过「取回」恢复。请先确认目标 Bucket 可用。</div></div>
+      <div class="form-note">只列出下载目录第一层的常见压缩包，不会递归扫描子目录；已在云端的条目默认跳过。</div>
+    </form>`,
+    foot: `<button class="btn btn-ghost" data-act="close-modal">取消</button><button class="btn btn-primary" type="submit" form="dlForm">${IC.upload} 开始上传</button>`,
+  });
+}
+
+async function submitDownloads(f, btn) {
+  const ids = $$('input[name="arch"]:checked', f).map((x) => Number(x.value));
+  const paths = Array.from(new Set(ids.map((i) => (st.dl[i] || {}).path).filter(Boolean)));
+  if (!paths.length) throw new Error("请至少选择一个压缩包");
+  const dest = f.elements.dest.value;
+  if (!dest) throw new Error("请选择上传目标");
+  const d = Object.assign({ paths, move: !!f.elements.move.checked }, parseDest(dest));
+  buttonBusy(btn, true, "提交中");
+  try {
+    const r = await api.archive(d);
+    localStorage.setItem("sb.dest", dest);
+    closeModalEl(f);
+    track(r.job_id, "上传下载目录压缩包", { onDone: (job) => {
+      const er = jobErr(job);
+      if (er) toast("部分压缩包未完成：" + er, "error");
+      else toast("压缩包已上传到云端", "ok");
+    } });
+  } finally { buttonBusy(btn, false); }
+}
+
 function restoreModal(opt) {
   opt = opt || {};
   const clouds = st.providers.reduce((a, p) => a + Number(p.archived_files || 0), 0);
@@ -1075,10 +1144,10 @@ function scanModal(opt) {
   const saved = (cfg.roots || []).map((r) => r.path || r).filter(Boolean);
   const preset = (opt.roots || []).filter(Boolean);
   const extSet = new Set((cfg.exts || []).map((x) => String(x).toLowerCase()));
-  const common = [".pdf", ".mp3", ".mp4", ".m4a", ".wav", ".flac", ".mkv", ".avi", ".mov", ".webm"];
+  const common = EXT_COMMON;
   const extra = Array.from(extSet).filter((x) => common.indexOf(x) < 0);
   const allExt = common.concat(extra);
-  if (!allExt.some((x) => extSet.has(x))) common.forEach((x) => extSet.add(x));
+  common.forEach((x) => extSet.add(x));
   const pickRoots = preset;
   st.pick = pickRoots.slice();
   let scope;
@@ -1097,8 +1166,8 @@ function scanModal(opt) {
   }
   const extHtml = allExt.map((x) => `<label class="chip" style="cursor:pointer"><input type="checkbox" name="ext" value="${e(x)}" ${extSet.has(x) ? "checked" : ""} style="margin-right:4px;accent-color:var(--amber-2)">${e(x)}</label>`).join("");
   return openModal({
-    title: "一键扫描本机媒体",
-    sub: "扫描只建立索引，不会上传、移动或修改任何文件。",
+    title: "一键扫描本机文件",
+    sub: "扫描只建立索引，不会上传、移动或修改任何文件。压缩包会一并收录，暂不提供在线解压。",
     wide: true,
     body: `<form id="scanForm" data-form="scan">
       ${scope}
@@ -1403,6 +1472,8 @@ document.addEventListener("submit", async (ev) => {
       await submitStitch(f, btn);
     } else if (f.dataset.form === "archive") {
       await submitArchive(f, btn);
+    } else if (f.dataset.form === "downloads") {
+      await submitDownloads(f, btn);
     } else if (f.dataset.form === "restore") {
       await submitRestore(f, btn);
     } else if (f.dataset.form === "scan") {
@@ -1432,8 +1503,56 @@ async function doCopy(text, label) {
   try { await api.copy(String(text)); toast((label || "内容") + "已复制", "ok"); } catch (err) { toast(errMsg(err), "error"); }
 }
 
+const VIEWABLE = new Set([".pdf", ".html", ".htm", ".txt", ".md", ".json", ".xml", ".csv", ".log",
+  ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".mp4", ".webm", ".mov", ".m4v",
+  ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"]);
+const OFFICE_VIEW = new Set([".docx", ".xlsx", ".pptx"]);
+const OFFICE_LEGACY = new Set([".doc", ".xls", ".ppt"]);
+const EXT_COMMON = [".pdf", ".mp3", ".mp4", ".m4a", ".wav", ".flac", ".mkv", ".avi", ".mov", ".webm",
+  ".docx", ".xlsx", ".pptx", ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst",
+  ".tgz", ".tbz2", ".txz", ".cab", ".iso"];
+
+function legacyOfficeHelp(path) {
+  openModal({
+    title: "旧版 Office 格式暂不支持预览",
+    sub: "doc / xls / ppt 是旧版二进制格式，本地预览组件只支持 docx / xlsx / pptx。",
+    body: `<p class="confirm-text">可以交给本机安装的 Microsoft Office 或 WPS 打开。云端文件会先下载到存储熊的临时目录，不会改动云端副本。</p>
+      <div class="form-note">提示：如果希望以后能直接预览，可以在 Office 中另存为 docx / xlsx / pptx。</div>`,
+    foot: `<button class="btn btn-ghost" data-close>取消</button><button class="btn btn-primary" data-act="legacy-open" data-path="${au(path)}">用本机 Office 打开</button>`,
+  });
+}
+
 async function doOpenEntry(path) {
   if (!path) return;
+  const m = String(path).match(/\.[^./\\]+$/);
+  const ext = m ? m[0].toLowerCase() : "";
+  if (OFFICE_VIEW.has(ext)) {
+    try { await api.preview(path); } catch (err) { toast(errMsg(err), "error", "无法预览"); }
+    return;
+  }
+  if (OFFICE_LEGACY.has(ext)) {
+    legacyOfficeHelp(path);
+    return;
+  }
+  if (VIEWABLE.has(ext)) {
+    try {
+      const r = await api.link(path);
+      if (r && r.mode === "url" && r.url) {
+        await api.openExternal(r.url);
+        toast("已在浏览器中打开，直接读取云端文件，不会下载到本机", "ok");
+        return;
+      }
+      if (r && r.mode === "local") {
+        const j = await api.open(path);
+        track(j.job_id, "打开文件", { refresh: false });
+        return;
+      }
+      throw new Error("没有取得可打开的链接");
+    } catch (err) {
+      toast(errMsg(err), "error", "打开失败");
+      return;
+    }
+  }
   try {
     const r = await api.open(path);
     track(r.job_id, "打开文件", { refresh: false });
@@ -1484,6 +1603,56 @@ function mountHelp(err) {
   });
 }
 
+function manualDriveHelp(r) {
+  openModal({
+    title: "使用 WebDAV 连接",
+    sub: "当前系统不支持自动映射盘符，请使用系统文件管理器连接本机 WebDAV。",
+    body: `<dl class="kv"><dt>地址</dt><dd><span class="copy-val">${e(r.url || "")}</span><button class="btn btn-sm btn-icon btn-ghost" data-copy="${e(r.url || "")}" data-label="地址">${IC.copy}</button></dd><dt>用户名</dt><dd><span class="copy-val">${e(r.user || "")}</span></dd><dt>密码</dt><dd><span class="copy-val">${e(r.pass || "")}</span><button class="btn btn-sm btn-icon btn-ghost" data-copy="${e(r.pass || "")}" data-label="密码">${IC.copy}</button></dd></dl><div class="form-note mt12">${e(r.hint || "")}。这是只读连接，仅限本机使用。</div>`,
+    foot: `<button class="btn btn-primary" data-act="close-modal">知道了</button>`,
+  });
+}
+
+function repairMountHelp(err) {
+  const detail = errMsg(err);
+  openModal({
+    title: "修复已完成，但重新挂载仍失败",
+    sub: "WebDAV 组件已经修好，这次是网络盘没有挂上，不需要重复修复。",
+    body: `<p class="confirm-text">${e(detail)}</p>
+      <ol class="mount-steps mt12">
+        <li>如果提示盘符被占用，请点「去换盘符」，或在「虚拟磁盘」页卸载原有网络盘后再挂载。</li>
+        <li>如果提示 WebClient 正在启动，请等几秒后点「再挂载一次」。</li>
+        <li>如果仍失败，重启电脑后再点「挂载为网络盘」。修复结果已经保存，不需要再次授权管理员。</li>
+      </ol>
+      <div class="form-note mt12">修复日志和本次挂载错误可以点「复制诊断」一并保存。挂载仍只在本机 127.0.0.1 进行。</div>`,
+    foot: `<button class="btn btn-ghost" data-copy="${e(detail)}" data-label="挂载诊断">复制诊断</button><button class="btn btn-ghost" data-act="open-logs">打开日志</button><button class="btn btn-ghost" data-act="drive-goto">去换盘符</button><button class="btn btn-primary" data-act="drive-remount">再挂载一次</button>`,
+  });
+}
+
+async function remountAfterRepair() {
+  const m = openModal({
+    title: "正在重新挂载网络盘",
+    sub: "WebDAV 组件已经修复，正在等待 Windows 客户端完成启动。",
+    body: `<div class="row" style="align-items:center;gap:10px">${spinner()}<b>正在重新连接本机只读网络盘…</b></div>
+      <div class="form-note mt16">通常几秒内完成。如果 Windows 刚重启过 WebClient，第一次连接可能需要稍等。</div>`,
+  });
+  try {
+    await sleep(1800);
+    const r = await api.driveAction("mount");
+    m.close();
+    await refreshAll().catch(() => {});
+    await render();
+    if (r && r.manual) { manualDriveHelp(r); return; }
+    toast("网络盘已重新挂载", "ok");
+  } catch (err) {
+    m.close();
+    const d = await api.drive().catch(() => null);
+    if (d) st.drive = d;
+    await refreshAll().catch(() => {});
+    await render();
+    repairMountHelp(err);
+  }
+}
+
 async function repairDrive() {
   const m = openModal({
     title: "正在一键修复 WebDAV",
@@ -1491,23 +1660,9 @@ async function repairDrive() {
     body: `<div class="row" style="align-items:center;gap:10px">${spinner()}<b>正在启用 WebDAV 客户端并重启 WebClient 服务…</b></div>
       <div class="form-note mt16">通常需要十几秒，请不要关闭存储熊。修复完成后会自动重新挂载；若系统提示需要重启，请重启电脑后再挂载。</div>`,
   });
+  let r;
   try {
-    const r = await api.repairDrive();
-    m.close();
-    await refreshAll().catch(() => {});
-    await render();
-    if (r && r.restart) {
-      openModal({
-        title: "修复完成，还需要重启电脑",
-        sub: "系统组件已经启用，但 Windows 要重启后才生效。",
-        body: `<p class="confirm-text">重启电脑后再打开存储熊，点击「挂载为网络盘」即可。之后如果仍然失败，可以在「虚拟磁盘」页再点一次「一键修复 WebDAV」。</p>`,
-        foot: `<button class="btn btn-primary" data-act="close-modal">知道了</button>`,
-      });
-      return;
-    }
-    toast("WebDAV 组件已修复，正在重新挂载", "ok");
-    await sleep(1200);
-    await doDrive("mount");
+    r = await api.repairDrive();
   } catch (err) {
     m.close();
     const detail = errMsg(err);
@@ -1522,7 +1677,22 @@ async function repairDrive() {
         </ol>`,
       foot: `<button class="btn btn-ghost" data-act="open-logs">打开日志</button><button class="btn btn-ghost" data-copy="${e(detail)}" data-label="诊断信息">复制诊断</button><button class="btn btn-primary" data-act="drive-repair">再试一次</button>`,
     });
+    return;
   }
+  m.close();
+  await refreshAll().catch(() => {});
+  await render();
+  if (r && r.restart) {
+    openModal({
+      title: "修复完成，还需要重启电脑",
+      sub: "系统组件已经启用，但 Windows 要重启后才生效。",
+      body: `<p class="confirm-text">重启电脑后再打开存储熊，点击「挂载为网络盘」即可。之后如果仍然失败，可以在「虚拟磁盘」页再点一次「一键修复 WebDAV」。</p>`,
+      foot: `<button class="btn btn-primary" data-act="close-modal">知道了</button>`,
+    });
+    return;
+  }
+  toast("WebDAV 组件已修复，正在重新挂载", "ok");
+  await remountAfterRepair();
 }
 
 async function doDrive(action) {
@@ -1531,12 +1701,7 @@ async function doDrive(action) {
     const r = await api.driveAction(action);
     if (action === "mount" && r && r.manual) {
       await refreshAll(); await render();
-      openModal({
-        title: "使用 WebDAV 连接",
-        sub: "当前系统不支持自动映射盘符，请使用系统文件管理器连接本机 WebDAV。",
-        body: `<dl class="kv"><dt>地址</dt><dd><span class="copy-val">${e(r.url || "")}</span><button class="btn btn-sm btn-icon btn-ghost" data-copy="${e(r.url || "")}" data-label="地址">${IC.copy}</button></dd><dt>用户名</dt><dd><span class="copy-val">${e(r.user || "")}</span></dd><dt>密码</dt><dd><span class="copy-val">${e(r.pass || "")}</span><button class="btn btn-sm btn-icon btn-ghost" data-copy="${e(r.pass || "")}" data-label="密码">${IC.copy}</button></dd></dl><div class="form-note mt12">${e(r.hint || "")}。这是只读连接，仅限本机使用。</div>`,
-        foot: `<button class="btn btn-primary" data-act="close-modal">知道了</button>`,
-      });
+      manualDriveHelp(r);
       return;
     }
     await refreshAll();
@@ -1622,6 +1787,10 @@ document.addEventListener("click", async (ev) => {
         st.path = path; st.q = ""; st.provider = ""; st.sel.clear(); render();
       } else if (act === "open-entry") {
         await doOpenEntry(path);
+      } else if (act === "legacy-open") {
+        closeModalEl(el);
+        const r = await api.open(path);
+        track(r.job_id, "用本机 Office 打开", { refresh: false });
       } else if (act === "fetch-entry") {
         await doFetch(path);
       } else if (act === "share-entry") {
@@ -1708,6 +1877,8 @@ document.addEventListener("click", async (ev) => {
         if (await confirmBox({ title: "删除拼接组合", text: `删除「${s.name || "拼接"}」？已迁出的文件不受影响。`, ok: "删除", danger: true })) {
           await api.deleteStitch(id); await refreshAll(); await render(); toast("拼接已删除", "ok");
         }
+      } else if (act === "downloads-archives") {
+        await downloadsArchives();
       } else if (act === "archive-open") {
         archiveModal(st.sel.size ? Array.from(st.sel) : []);
       } else if (act === "restore-open") {
@@ -1769,6 +1940,9 @@ document.addEventListener("click", async (ev) => {
       } else if (act === "drive-retry") {
         closeModalEl(el);
         await doDrive("mount");
+      } else if (act === "drive-remount") {
+        closeModalEl(el);
+        await remountAfterRepair();
       } else if (act === "drive-goto") {
         closeModalEl(el);
         setView("drive");
@@ -1799,8 +1973,7 @@ document.addEventListener("click", async (ev) => {
       } else if (act === "settings-root-del") {
         await delRoot(path);
       } else if (act === "settings-ext-reset") {
-        const common = [".pdf", ".mp3", ".mp4", ".m4a", ".wav", ".flac", ".mkv", ".avi", ".mov", ".webm"];
-        st.cfg = await api.saveConfig({ exts: common }); await refreshAll(); await render(); toast("已恢复默认扩展名", "ok");
+        st.cfg = await api.saveConfig({ exts: EXT_COMMON }); await refreshAll(); await render(); toast("已恢复默认扩展名", "ok");
       } else if (act === "settings-auto") {
         if (st.info && st.info.dev) { toast("开发模式下不修改系统自启动项", "info"); return; }
         try {
@@ -1887,6 +2060,11 @@ window.addEventListener("hashchange", () => {
   if (!st.status || !st.status.logged_in) return;
   const h = location.hash.replace(/^#\/?/, "");
   if (PAGE[h] && h !== st.view) setView(h);
+});
+
+api.onFilesChanged(() => {
+  if (!st.status || !st.status.logged_in) return;
+  refreshAll().then(render).catch(() => {});
 });
 
 boot().catch((err) => {

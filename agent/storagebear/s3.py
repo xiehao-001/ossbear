@@ -269,7 +269,7 @@ class S3:
         self._send("DELETE", key)
         return True
 
-    def presign(self, key, expires=3600):
+    def presign(self, key, expires=3600, disposition="", ctype=""):
         expires = max(60, min(int(expires), 604800))
         when = datetime.datetime.utcnow()
         day = when.strftime("%Y%m%d")
@@ -282,6 +282,10 @@ class S3:
             ("X-Amz-Expires", str(expires)),
             ("X-Amz-SignedHeaders", "host"),
         ]
+        if disposition:
+            qs.append(("response-content-disposition", disposition))
+        if ctype:
+            qs.append(("response-content-type", ctype))
         path = self._path(key)
         q = self._query(qs)
         payload = "UNSIGNED-PAYLOAD"
