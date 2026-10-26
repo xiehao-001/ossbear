@@ -396,6 +396,25 @@ def _roots(agent):
     return out
 
 
+def _cloud_roots(agent):
+    out = []
+    seen = set()
+    for p in agent.db.provs():
+        if not (p.get("enabled") and p.get("has_key") and p.get("endpoint") and p.get("bucket")):
+            continue
+        label = p.get("label") or p.get("code") or "云存储"
+        base = util.safe_name("%s-%s" % (label, p.get("bucket") or "bucket"), 80)
+        name = base
+        n = 2
+        while name.lower() in seen:
+            name = "%s-%d" % (base, n)
+            n += 1
+        seen.add(name.lower())
+        out.append({"name": name, "provider_id": p["id"], "label": label,
+                    "bucket": p.get("bucket") or "", "mtime": int(p.get("updated_at") or 0)})
+    return out
+
+
 def _date(t):
     return formatdate(int(t or 0), usegmt=True)
 
@@ -441,6 +460,7 @@ class Drive:
             "port": int(c.get("drive_port") or 0),
             "letter": c.get("drive_letter") or "",
             "auto": bool(c.get("drive_auto", False)),
+            "cloud": bool(c.get("drive_cloud", True)),
         }
 
     def start(self):
@@ -682,7 +702,7 @@ class Drive:
         return {
             "running": bool(self.srv), "url": self.url(), "user": c["user"], "pass": c["pass"],
             "port": self.port or c["port"], "letter": c["letter"], "mounted": self.mounted(),
-            "auto": c["auto"],
+            "auto": c["auto"], "cloud": c["cloud"],
         }
 
     def _need(self):
@@ -792,6 +812,25 @@ def _handler(agent, user, pw, token=""):
         def log_message(self, fmt, *args):
             pass
 
+        def _cmode(self):
+            try:
+                return bool((agent.cfg or {}).get("drive_cloud", True))
+            except Exception:
+                return True
+
+        def _seed_cloud(self):
+            if not self._cmode():
+                return
+            try:
+                t = time.time()
+                if t - getattr(agent, "_cd_seed_ts", 0) < 30:
+                    return
+                agent._cd_seed_ts = t
+                ents = _cloud_roots(agent)
+                agent.db.cd_seed(agent, [x["provider_id"] for x in ents])
+            except Exception as e:
+                util.log("clouddrive seed: %s" % e)
+
         def _auth(self):
             got = self.headers.get("Authorization", "")
             if not got.startswith("Basic "):
@@ -898,9 +937,26 @@ def _handler(agent, user, pw, token=""):
             return parts
 
         def _at(self, parts):
-            roots = _roots(agent)
             if not parts:
                 return None, "root", None
+            if self._cmode():
+                ent = next((x for x in _cloud_roots(agent) if x["name"] == parts[0]), None)
+                if not ent:
+                    return None, "missing", None
+                pid = ent["provider_id"]
+                if len(parts) == 1:
+                    return {"provider_id": pid, "path": "", "name": parts[0], "is_dir": 1,
+                            "size": 0, "mtime": ent.get("mtime") or util.now(), "kind": "dir"}, "dir", None
+                disp = "/".join(parts[1:])
+                r = agent.db.cd_get(pid, disp)
+                if not r:
+                    return None, "missing", None
+                row = dict(r)
+                row["provider_id"] = pid
+                row["name"] = parts[-1]
+                row["kind"] = "dir" if row.get("is_dir") else util.kind(util.ext(row["name"]))
+                return row, "dir" if row.get("is_dir") else "file", None
+            roots = _roots(agent)
             alias = parts[0]
             root = roots.get(alias)
             if not root:
@@ -947,7 +1003,7 @@ def _handler(agent, user, pw, token=""):
             mtime = int(row.get("mtime") or 0)
             size = int(row.get("size") or 0)
             p = row.get("path") or ""
-            if os.path.isfile(p):
+            if not self._cmode() and os.path.isfile(p):
                 size = os.path.getsize(p)
                 mtime = int(os.path.getmtime(p))
             ctype = ops._mime(p)
@@ -964,7 +1020,10 @@ def _handler(agent, user, pw, token=""):
             self._drain()
             if not self._allow():
                 self.close_connection = True
-            self._send(200, b"", extra={"Allow": "OPTIONS, GET, HEAD, PROPFIND"})
+            allow = "OPTIONS, GET, HEAD, PROPFIND, PROPPATCH"
+            if self._cmode():
+                allow += ", PUT, MKCOL"
+            self._send(200, b"", extra={"Allow": allow})
 
         def do_PROPPATCH(self):
             self._drain()
@@ -987,17 +1046,144 @@ def _handler(agent, user, pw, token=""):
             self._drain()
             if not self._allow():
                 return self._deny()
-            self._send(405, b"StorageBear WebDAV is read-only",
-                       extra={"Allow": "OPTIONS, GET, HEAD, PROPFIND, PROPPATCH"})
+            allow = "OPTIONS, GET, HEAD, PROPFIND, PROPPATCH"
+            if self._cmode():
+                allow += ", PUT, MKCOL"
+            self._send(405, b"operation not supported", extra={"Allow": allow})
+
+        def _cloud_target(self, parts):
+            if not parts or len(parts) < 2:
+                return None, None, 403, "根目录只读，请进入桶文件夹后再操作"
+            ent = next((x for x in _cloud_roots(agent) if x["name"] == parts[0]), None)
+            if not ent:
+                return None, None, 404, "云存储文件夹不存在"
+            return ent["provider_id"], "/".join(parts[1:]), 0, ""
+
+        def _recv_body(self, dst):
+            te = (self.headers.get("Transfer-Encoding") or "").lower()
+            raw_len = self.headers.get("Content-Length")
+            with open(dst, "wb") as f:
+                if "chunked" in te:
+                    while True:
+                        line = self.rfile.readline(128)
+                        if not line:
+                            break
+                        line = line.strip().split(b";", 1)[0]
+                        if not line:
+                            continue
+                        try:
+                            size = int(line, 16)
+                        except ValueError:
+                            raise RuntimeError("分块长度无效")
+                        if size == 0:
+                            while True:
+                                trailer = self.rfile.readline(128)
+                                if trailer in (b"\r\n", b"\n", b""):
+                                    break
+                            break
+                        left = size
+                        while left > 0:
+                            b = self.rfile.read(min(262144, left))
+                            if not b:
+                                break
+                            f.write(b)
+                            left -= len(b)
+                        self.rfile.read(2)
+                else:
+                    if raw_len is None:
+                        raise RuntimeError("缺少 Content-Length")
+                    try:
+                        left = int(raw_len)
+                    except ValueError:
+                        raise RuntimeError("Content-Length 无效")
+                    while left > 0:
+                        b = self.rfile.read(min(262144, left))
+                        if not b:
+                            break
+                        f.write(b)
+                        left -= len(b)
+                    if left > 0:
+                        raise RuntimeError("请求体不完整")
+            return os.path.getsize(dst)
 
         def do_PUT(self):
-            self._write_denied()
+            if not self._cmode():
+                return self._write_denied()
+            if not self._allow():
+                return self._deny()
+            parts = self._parts()
+            pid, disp, code, why = self._cloud_target(parts)
+            if code:
+                self.close_connection = True
+                return self._send(code, why.encode("utf-8"))
+            blocked = {"desktop.ini", "thumbs.db", "ehthumbs.db", ".ds_store"}
+            if parts[-1].lower() in blocked or parts[-1].startswith("~$"):
+                self.close_connection = True
+                return self._send(403, b"system metadata is not uploaded")
+            row = agent.db.cd_get(pid, disp)
+            if row and row.get("is_dir"):
+                self.close_connection = True
+                return self._send(409, b"target is a folder")
+            parent = disp.rsplit("/", 1)[0] if "/" in disp else ""
+            try:
+                if parent:
+                    agent.db.cd_mkdirs(pid, parent)
+            except Exception as e:
+                self.close_connection = True
+                return self._send(409, str(e).encode("utf-8"))
+            d = util.path("tmp", "drive")
+            os.makedirs(d, exist_ok=True)
+            tmp = os.path.join(d, "up-%s.part" % secrets.token_hex(8))
+            try:
+                size = self._recv_body(tmp)
+            except Exception as e:
+                self.close_connection = True
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return self._send(400, ("上传中断：%s" % e).encode("utf-8"))
+            key = (row or {}).get("object_key") or ("_storagebear/drive/%s/%s/%s" % (
+                pid, str((agent.cfg or {}).get("device_id") or "pc")[:32], disp))
+            mtime = util.now()
+            try:
+                ops._s3(agent, pid).put_file(key, tmp, ops._mime(disp))
+                agent.db.cd_add(pid, disp, parts[-1], 0, key, size, mtime)
+                if row and row.get("object_key") == key:
+                    agent.db.touch_key(key, size, mtime)
+            except Exception as e:
+                util.log("drive put %s: %s" % (disp, e))
+                return self._send(502, ("上传失败：%s" % e).encode("utf-8"))
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+            util.log("drive put %s/%s (%d bytes)" % (pid, disp, size))
+            self._send(204 if row else 201, b"", extra={"ETag": '"%x-%x"' % (size, mtime),
+                                                       "Last-Modified": _date(mtime)})
 
         def do_DELETE(self):
             self._write_denied()
 
         def do_MKCOL(self):
-            self._write_denied()
+            if not self._cmode():
+                return self._write_denied()
+            if not self._allow():
+                return self._deny()
+            self._drain()
+            parts = self._parts()
+            pid, disp, code, why = self._cloud_target(parts)
+            if code:
+                return self._send(code, why.encode("utf-8"))
+            if agent.db.cd_get(pid, disp):
+                return self._send(405, b"exists")
+            try:
+                agent.db.cd_mkdirs(pid, disp)
+            except Exception as e:
+                return self._send(409, str(e).encode("utf-8"))
+            util.log("drive mkcol %s/%s" % (pid, disp))
+            self._send(201)
 
         def do_MOVE(self):
             self._write_denied()
@@ -1024,22 +1210,32 @@ def _handler(agent, user, pw, token=""):
             row, kind, _ = self._at(parts)
             if kind == "missing":
                 return self._send(404)
+            if self._cmode() and kind == "dir" and not (row or {}).get("path"):
+                self._seed_cloud()
             depth = (self.headers.get("Depth") or "1").lower()
             xml = ['<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">']
             if kind == "root":
                 # Windows WebDAV 客户端要求 PROPFIND 结果包含被请求的集合自身，
                 # 否则会把共享根判为不存在并报系统错误 67。
+                self._seed_cloud()
                 xml.append(self._prop([], {"path": "", "mtime": 0}, "dir"))
                 if depth != "0":
-                    for alias in _roots(agent):
-                        r = {"path": "", "mtime": 0}
-                        xml.append(self._prop([alias], r, "dir"))
+                    if self._cmode():
+                        for ent in _cloud_roots(agent):
+                            xml.append(self._prop([ent["name"]], {"path": "", "mtime": ent.get("mtime") or util.now()}, "dir"))
+                    else:
+                        for alias in _roots(agent):
+                            r = {"path": "", "mtime": 0}
+                            xml.append(self._prop([alias], r, "dir"))
                 xml.append("</D:multistatus>")
                 return self._send(207, "".join(xml).encode("utf-8"), 'application/xml; charset="utf-8"')
             xml.append(self._prop(parts, row, kind))
             if kind == "dir" and depth != "0":
                 try:
-                    kids = agent.db.kids(row["path"])
+                    if self._cmode():
+                        kids = agent.db.cd_list(row["provider_id"], row.get("path") or "")
+                    else:
+                        kids = agent.db.kids(row["path"])
                 except Exception:
                     kids = []
                 for k in kids:
@@ -1088,7 +1284,7 @@ def _handler(agent, user, pw, token=""):
             p = row.get("path") or ""
             size = int(row.get("size") or 0)
             mtime = int(row.get("mtime") or 0)
-            if os.path.isfile(p):
+            if not self._cmode() and os.path.isfile(p):
                 st = os.stat(p)
                 size, mtime = st.st_size, int(st.st_mtime)
             self.send_response(200)
@@ -1109,6 +1305,10 @@ def _handler(agent, user, pw, token=""):
                 return self._listing(parts, row, kind)
             if kind != "file":
                 return self._send(404)
+            if self._cmode():
+                if row.get("object_key"):
+                    return self._cloud(row)
+                return self._send(404)
             p = row.get("path") or ""
             if os.path.isfile(p):
                 return self._file(row)
@@ -1118,13 +1318,23 @@ def _handler(agent, user, pw, token=""):
 
         def _listing(self, parts, row, kind):
             if kind == "root":
+                self._seed_cloud()
                 title = "存储熊 WebDAV"
-                items = [(alias, self._href([alias], True), True) for alias in _roots(agent)]
+                if self._cmode():
+                    items = [(ent["name"], self._href([ent["name"]], True), True)
+                             for ent in _cloud_roots(agent)]
+                else:
+                    items = [(alias, self._href([alias], True), True) for alias in _roots(agent)]
             else:
+                if self._cmode() and not (row or {}).get("path"):
+                    self._seed_cloud()
                 title = parts[-1] if parts else "存储熊"
                 items = []
                 try:
-                    kids = agent.db.kids(row["path"])
+                    if self._cmode():
+                        kids = agent.db.cd_list(row["provider_id"], row.get("path") or "")
+                    else:
+                        kids = agent.db.kids(row["path"])
                 except Exception:
                     kids = []
                 for k in kids:
@@ -1138,7 +1348,10 @@ def _handler(agent, user, pw, token=""):
             for name, href, is_dir in items:
                 label = escape(str(name)) + ("/" if is_dir else "")
                 rows.append('<li><a href="%s">%s</a></li>' % (_attr(href), label))
-            empty = "" if rows else '<p class="hint">这里还没有索引记录，或该目录为空。请先在存储熊客户端完成扫描。</p>'
+            empty = "" if rows else ('<p class="hint">这里还没有云端文件。把文件拖进桶文件夹即可上传。</p>'
+                                      if self._cmode() else
+                                      '<p class="hint">这里还没有索引记录，或该目录为空。请先在存储熊客户端完成扫描。</p>')
+            sub = "存储熊云端盘 · WebDAV" if self._cmode() else "存储熊只读虚拟盘 · WebDAV"
             body = ('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
                     '<meta name="viewport" content="width=device-width,initial-scale=1">'
                     '<title>%s · 存储熊</title><style>'
@@ -1149,8 +1362,8 @@ def _handler(agent, user, pw, token=""):
                     'ul{list-style:none;padding:0;margin:0}li{padding:7px 0;border-bottom:1px solid #eef1f7}'
                     'a{color:#1668dc;text-decoration:none}a:hover{text-decoration:underline}'
                     '</style></head><body><main><h1>%s</h1>'
-                    '<p class="hint">存储熊只读虚拟盘 · WebDAV</p>%s<ul>%s</ul>%s</main></body></html>') % (
-                escape(title), escape(title), up, "".join(rows), empty)
+                    '<p class="hint">%s</p>%s<ul>%s</ul>%s</main></body></html>') % (
+                escape(title), escape(title), escape(sub), up, "".join(rows), empty)
             self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
 
         def _file(self, row):

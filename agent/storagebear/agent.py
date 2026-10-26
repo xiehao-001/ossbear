@@ -6,7 +6,7 @@ import threading
 import time
 
 from . import VERSION, ops, scan, util
-from .drive import Drive
+from .drive import Drive, _cloud_roots
 from .jobs import Jobs
 from .localdb import DB
 from .remote import Api, ApiError
@@ -271,11 +271,57 @@ class Agent:
             return {"path": q}
         return self.jobs.add("fetch", fn)
 
+    def _drive_cloud_parts(self, p):
+        s = str(p or "").replace("/", "\\")
+        if "davwwwroot" in s.lower():
+            tail = s.split("DavWWWRoot", 1)[-1].strip("\\")
+            parts = [x for x in tail.split("\\") if x]
+            if parts and parts[0].lower() == "dav":
+                parts = parts[1:]
+            tok = str(self.cfg.get("drive_token") or "")
+            if tok and parts and parts[0] == tok:
+                parts = parts[1:]
+            return parts
+        raw = str(self.cfg.get("drive_letter") or "").strip()
+        if not raw:
+            return []
+        letter = raw[0].upper()
+        root = letter + ":\\"
+        if not s.upper().startswith(root):
+            return []
+        return [x for x in s[len(root):].strip("\\").split("\\") if x]
+
+    def _drive_cloud_row(self, p):
+        try:
+            if not self.cfg.get("drive_cloud", True):
+                return None
+            parts = self._drive_cloud_parts(p)
+            if len(parts) < 2:
+                return None
+            ent = next((x for x in _cloud_roots(self) if x["name"] == parts[0]), None)
+            if not ent:
+                return None
+            row = self.db.cd_get(ent["provider_id"], "/".join(parts[1:]))
+            if row and not row.get("is_dir") and row.get("object_key"):
+                return ent["provider_id"], row
+        except Exception:
+            return None
+
     def quicklink(self, path, provider_id=""):
         if not str(path or "").strip():
             raise RuntimeError("缺少文件路径")
         p = util.native(path)
         r = self.db.file(p)
+        drive = self._drive_cloud_row(p) if not r else None
+        if drive:
+            pid, row = drive
+            url, exp = ops.link(ops._s3(self, pid), row["object_key"])
+            prov = self.db.prov(pid) or {}
+            return {"url": url, "expires_at": exp, "provider_id": pid,
+                    "provider_label": prov.get("label") or "",
+                    "name": p.replace("\\", "/").rsplit("/", 1)[-1]}
+        if not r and self.cfg.get("drive_cloud", True) and self._drive_cloud_parts(p):
+            raise RuntimeError("虚拟盘文件没有可用的云端对象")
         if not os.path.isfile(p) and not (r and r.get("object_key")):
             raise RuntimeError("文件不存在")
         # 已有云端副本时直接复用，避免为了一个链接再上传一份。
@@ -365,6 +411,7 @@ class Agent:
         if n and n["n"] and not force:
             raise RuntimeError("该云存储仍有 %d 个云端文件，请先迁回或确认强制删除" % n["n"])
         self.db.delp(pid)
+        self.db.cd_del_provider(pid)
         if self.api.token:
             try:
                 self.api.del_provider(pid)
@@ -407,7 +454,8 @@ class Agent:
                 "last_roots": c.get("last_roots") or [], "meta_error": c.get("meta_error", ""),
                 "quick_link_provider": c.get("quick_link_provider") or "",
                 "quick_notify": bool(c.get("quick_notify", True)),
-                "quick_menu": bool(c.get("quick_menu", True))}
+                "quick_menu": bool(c.get("quick_menu", True)),
+                "drive_cloud": bool(c.get("drive_cloud", True))}
 
     def status(self):
         try:

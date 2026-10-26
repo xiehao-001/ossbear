@@ -523,7 +523,7 @@ async function viewDash() {
   <div class="grid g4 mb16">
     <div class="card stat"><div class="stat-ic">${IC.folder}</div><div><b>${c.files || 0}</b><span>本机文件</span><small>${fmtSize(c.bytes || 0)} 已纳管</small></div></div>
     <div class="card stat"><div class="stat-ic amber">${IC.cloud}</div><div><b>${c.archived || 0}</b><span>仅云端文件</span><small>${fmtSize(cloudBytes)} 迁出空间</small></div></div>
-    <div class="card stat"><div class="stat-ic mint">${IC.drive}</div><div><b>${mounted ? "已挂载" : (s.drive && s.drive.running ? "服务就绪" : "未启动")}</b><span>虚拟磁盘</span><small>${mounted ? "只读镜像盘在线" : "WebDAV · 本机安全连接"}</small></div></div>
+    <div class="card stat"><div class="stat-ic mint">${IC.drive}</div><div><b>${mounted ? "已挂载" : (s.drive && s.drive.running ? "服务就绪" : "未启动")}</b><span>虚拟磁盘</span><small>${mounted ? ((s.drive && s.drive.cloud !== false) ? "云端盘在线" : "只读镜像盘在线") : "WebDAV · 本机安全连接"}</small></div></div>
     <div class="card stat"><div class="stat-ic violet">${IC.clock}</div><div><b>${due.length ? due.length + " 个" : "正常"}</b><span>续费提醒</span><small>${due.length ? "建议尽快处理" : "15 天内无到期"}</small></div></div>
   </div>
   <div class="split">
@@ -628,7 +628,7 @@ async function viewFiles() {
     <div id="selbar" class="selbar ${selCount ? "" : "hidden"}"><b><span data-cnt>${selCount}</span> 个文件已选择</b><div class="spacer"></div><button class="btn btn-sm btn-ghost" data-act="sel-clear">清除</button><button class="btn btn-sm btn-primary" data-act="${st.status === "cloud" ? "sel-restore" : "sel-archive"}">${st.status === "cloud" ? IC.download + " 迁回所选" : IC.upload + " 迁出所选"}</button></div>
     ${entries.length ? `<table class="tbl"><thead><tr><th class="col-check"><input type="checkbox" class="check" id="sel-all" title="全选当前列表"></th><th>名称与位置</th><th class="col-size">大小</th><th class="col-badge">状态</th><th class="col-acts"></th></tr></thead><tbody>${entries.map(rowHtml).join("")}</tbody></table>` : emptyFiles(mode, filtOn)}
   </div>
-  <p class="small faint mt12">提示：扫描只收录设置中的扩展名，压缩包（zip / rar / 7z 等）会一并收录；目录不会被迁出，迁出目录时只处理其中的已索引文件。虚拟盘是只读镜像，不会改动原文件。</p>
+  <p class="small faint mt12">提示：扫描只收录设置中的扩展名，压缩包（zip / rar / 7z 等）会一并收录；目录不会被迁出，迁出目录时只处理其中的已索引文件。本机索引镜像模式为只读；云端盘只会在自动生成的桶文件夹内上传，不会改动本地原文件。</p>
 </div>`;
 }
 function rowHtml(x) {
@@ -1198,7 +1198,7 @@ function scanModal(opt) {
       <div class="field"><label>收录的文件类型</label><div class="chips">${extHtml}</div></div>
       <div class="form-grid"><div class="field full"><label>补充扩展名 <small>空格或逗号分隔，可留空</small></label><input class="input" name="more" placeholder=".epub .aac .flac"></div></div>
       <div class="alert alert-info">${IC.info}<div><b>全盘扫描会跳过系统目录、隐藏目录${skipCount ? `和 ${skipCount} 个免扫路径` : ""}</b>，但文件很多时仍可能需要几分钟。你可以在任务卡中查看进度，扫描期间不影响其他操作。</div></div>
-      <div class="form-note">扫描后文件会进入「文件库」，原路径保持不变。之后才能对目录或文件执行迁出；云端文件可通过 WebDAV 虚拟盘只读访问。</div>
+      <div class="form-note">扫描后文件会进入「文件库」，原路径保持不变。之后才能对目录或文件执行迁出；云端文件可通过虚拟磁盘按需读取。</div>
     </form>`,
     foot: `<button class="btn btn-ghost" data-act="close-modal">取消</button><button class="btn btn-primary" type="submit" form="scanForm">${IC.scan} 开始扫描</button>`,
   });
@@ -1213,21 +1213,22 @@ async function viewDrive() {
   const win = (st.info && st.info.platform === "win32");
   const mounted = !!d.mounted;
   const running = !!d.running;
+  const cloud = d.cloud !== false;
   const state = mounted ? '<span class="tag green">已挂载</span>' : running ? '<span class="tag amber">服务就绪</span>' : '<span class="tag">未启动</span>';
   const steps = win ? `<ol class="mount-steps">
       <li>保持存储熊在托盘运行。安装程序会自动启用 Windows 的 WebDAV 客户端（WebClient）。</li>
-      <li>点击「挂载为网络盘」，存储熊会使用专用账号把只读盘映射到空闲盘符。</li>
-      <li>在「此电脑」中打开 <b>${e(d.letter || "网络盘")}</b>，可浏览常用目录与云端副本文件。</li>
+      <li>点击「挂载为网络盘」，存储熊会把${cloud ? "云端盘" : "本机索引镜像"}映射到空闲盘符。</li>
+      <li>在「此电脑」中打开 <b>${e(d.letter || "网络盘")}</b>${cloud ? "，根目录只显示各云存储的桶文件夹；进入桶文件夹后可拖入文件上传，双击文件从云端读取。" : "，可浏览常用目录与云端副本文件。"}</li>
       <li>挂载失败时点「一键修复 WebDAV」，在 Windows 弹窗中选「是」，随后会自动重试；无需输入命令。</li>
     </ol>` : `<ol class="mount-steps">
       <li>确认存储熊正在运行，且「WebDAV 服务」显示已就绪。</li>
       <li>${(st.info && st.info.platform) === "darwin" ? "打开 Finder → 前往 → 连接服务器，输入下方地址。" : "在文件管理器中使用「连接服务器 / 其他位置」，或运行 <code>gio mount dav://127.0.0.1:" + Number(d.port || 0) + "/dav/</code>。"}</li>
       <li>用户名与密码使用本页显示的专用凭据。凭据只保存在本机。</li>
-      <li>连接成功后会出现只读目录；可浏览本地索引目录与云端文件。</li>
+      <li>连接成功后${cloud ? "会看到云存储桶文件夹，桶内可上传、新建文件夹和下载" : "会出现只读目录，可浏览本地索引目录与云端文件"}。</li>
     </ol>`;
   return `<div class="view-inner">
     ${banner()}
-    <div class="sec-head"><div><h3>虚拟磁盘</h3><p>通过本机 WebDAV 只读镜像，把索引目录与云端副本挂成一块网络盘。</p></div><button class="btn btn-ghost" data-act="drive-refresh">${IC.refresh} 刷新状态</button></div>
+    <div class="sec-head"><div><h3>虚拟磁盘</h3><p>${cloud ? "云端盘只显示存储熊上传过的文件，可拖入上传与按需读取。" : "本机索引只读镜像，把扫描目录与云端副本挂成网络盘。"}</p></div><button class="btn btn-ghost" data-act="drive-refresh">${IC.refresh} 刷新状态</button></div>
     <div class="card drive-hero mb16">
       <div class="drive-glyph">${IC.drive}</div>
       <div style="flex:1;min-width:0"><div class="row" style="gap:8px;margin-bottom:5px"><h3 style="font-size:18px">${e(d.letter || (win ? "虚拟网络盘" : "WebDAV 磁盘"))}</h3>${state}</div>
@@ -1237,7 +1238,7 @@ async function viewDrive() {
         ${win ? (mounted ? `<button class="btn btn-ghost" data-act="drive-unmount">卸载网络盘</button>` : `<button class="btn btn-primary" data-act="drive-mount" ${running ? "" : "disabled"}>挂载为网络盘</button>`) : `<button class="btn btn-primary" data-act="drive-mount" ${running ? "" : "disabled"}>查看连接方法</button>`}
       </div>
     </div>
-    <div class="alert alert-warn mb16">${IC.warn}<div><b>这是一块只读镜像盘。</b>可以把文件复制出来、直接打开，但写入、改名、删除不会同步到原文件或云端。需要整理文件时，请回到文件库操作。仅显示已扫描的目录结构与已索引的文件。</div></div>
+    ${cloud ? `<div class="alert alert-info mb16">${IC.info}<div><b>这是一块云端盘。</b>根目录只显示自动生成的「厂商-Bucket」文件夹，根目录不允许新建或上传。进入桶文件夹后，拖入文件即上传到云端，双击文件从云端读取；暂不支持删除和改名，同名上传会由资源管理器提示是否覆盖。只显示存储熊上传过的对象，桶里其他来源的文件不会出现。</div></div>` : `<div class="alert alert-warn mb16">${IC.warn}<div><b>这是一块只读镜像盘。</b>可以把文件复制出来、直接打开，但写入、改名、删除不会同步到原文件或云端。需要整理文件时，请回到文件库操作。仅显示已扫描的目录结构与已索引的文件。</div></div>`}
     <div class="split">
       <div>
         <div class="card card-pad mb16">
@@ -1252,8 +1253,9 @@ async function viewDrive() {
           ${win ? `<form data-form="drive-letter" class="row mt16" style="align-items:flex-end"><div class="field" style="margin:0"><label>指定盘符</label><input class="input" name="letter" maxlength="2" value="${e((d.letter || "").replace(/:$/, ""))}" placeholder="Z" style="width:80px"></div><button class="btn btn-sm" type="submit">保存盘符</button><span class="tiny faint">留空则自动选择空闲盘符</span></form>` : ""}
         </div>
         <div class="card card-pad">
-          <div class="setting-row"><div class="setting-info"><b>开机后自动挂载（Windows）</b><p>启动存储熊时自动连接只读网络盘。电脑重启后请确保登录的是同一个系统账号。</p></div><button class="switch ${d.auto ? "on" : ""}" data-act="drive-auto" aria-label="切换自动挂载"></button></div>
-          <div class="setting-row"><div class="setting-info"><b>只读与隐私</b><p>服务只监听 127.0.0.1，使用随机生成的专用密码。删除存储熊数据目录会重置这组凭据。</p></div><span class="tag green">本机</span></div>
+          <div class="setting-row"><div class="setting-info"><b>云端盘模式</b><p>只显示存储熊上传过的云端文件，可在桶文件夹内拖入上传、新建文件夹。关闭后切换为本机索引只读镜像。</p></div><button class="switch ${cloud ? "on" : ""}" data-act="drive-cloud" aria-label="切换云端盘模式"></button></div>
+          <div class="setting-row"><div class="setting-info"><b>开机后自动挂载（Windows）</b><p>启动存储熊时自动连接网络盘。电脑重启后请确保登录的是同一个系统账号。</p></div><button class="switch ${d.auto ? "on" : ""}" data-act="drive-auto" aria-label="切换自动挂载"></button></div>
+          <div class="setting-row"><div class="setting-info"><b>本机与隐私</b><p>服务只监听 127.0.0.1，使用随机生成的专用密码。删除存储熊数据目录会重置这组凭据。</p></div><span class="tag green">本机</span></div>
         </div>
       </div>
       <div>
@@ -1292,7 +1294,7 @@ async function viewPhone() {
       </div>
       <div class="card card-pad" style="background:linear-gradient(145deg,#fffdf8,#fff)">
         <div class="card-title-row"><div><h3>现在可以做什么</h3><p>不依赖手机功能。</p></div>${IC.shield}</div>
-        <p class="small muted" style="line-height:1.85;margin:0">用 Windows 客户端把索引目录挂成只读网络盘，或直接在文件库中打开、创建限时链接、迁出与迁回。云密钥仍然只保存在本机，服务器不会收到。</p>
+        <p class="small muted" style="line-height:1.85;margin:0">用 Windows 客户端把云端桶或索引目录挂成虚拟盘，或直接在文件库中打开、创建限时链接、迁出与迁回。云密钥仍然只保存在本机，服务器不会收到。</p>
         <div class="form-note mt12"><b>说明：</b>功能完成前，客户端会把这个入口保持为「开发中」，不再展示手机地址与登录说明。</div>
       </div>
     </div>
@@ -1361,7 +1363,7 @@ async function viewSettings() {
           <div class="steps">
             <div class="step done"><div class="step-no">✓</div><div><b>云密钥只留本机</b><p>AccessKey / SecretKey 不上传服务器；Windows 使用 DPAPI 加密。服务器只同步索引、设备和迁移日志。</p></div></div>
             <div class="step"><div class="step-no">…</div><div><b>手机只读访问（开发中）</b><p>功能上线后会保持单向只读：手机可读电脑，电脑不能读取手机或其他电脑。</p></div></div>
-            <div class="step done"><div class="step-no">✓</div><div><b>虚拟盘仅本机只读</b><p>WebDAV 服务绑定 127.0.0.1，并禁止写操作。</p></div></div>
+            <div class="step done"><div class="step-no">✓</div><div><b>虚拟盘仅监听本机</b><p>WebDAV 服务绑定 127.0.0.1；云端盘只在桶文件夹内上传，根目录与删除、改名操作仍被禁止。</p></div></div>
           </div>
           <div class="form-note mt12"><b>保持更新：</b>请定期查看日志目录；如密钥可能泄露，请立即到云厂商控制台禁用该 AccessKey，并在存储熊中更新配置。</div>
         </div>
@@ -1640,7 +1642,7 @@ function manualDriveHelp(r) {
   openModal({
     title: "使用 WebDAV 连接",
     sub: "当前系统不支持自动映射盘符，请使用系统文件管理器连接本机 WebDAV。",
-    body: `<dl class="kv"><dt>地址</dt><dd><span class="copy-val">${e(r.url || "")}</span><button class="btn btn-sm btn-icon btn-ghost" data-copy="${e(r.url || "")}" data-label="地址">${IC.copy}</button></dd><dt>用户名</dt><dd><span class="copy-val">${e(r.user || "")}</span></dd><dt>密码</dt><dd><span class="copy-val">${e(r.pass || "")}</span><button class="btn btn-sm btn-icon btn-ghost" data-copy="${e(r.pass || "")}" data-label="密码">${IC.copy}</button></dd></dl><div class="form-note mt12">${e(r.hint || "")}。这是只读连接，仅限本机使用。</div>`,
+    body: `<dl class="kv"><dt>地址</dt><dd><span class="copy-val">${e(r.url || "")}</span><button class="btn btn-sm btn-icon btn-ghost" data-copy="${e(r.url || "")}" data-label="地址">${IC.copy}</button></dd><dt>用户名</dt><dd><span class="copy-val">${e(r.user || "")}</span></dd><dt>密码</dt><dd><span class="copy-val">${e(r.pass || "")}</span><button class="btn btn-sm btn-icon btn-ghost" data-copy="${e(r.pass || "")}" data-label="密码">${IC.copy}</button></dd></dl><div class="form-note mt12">${e(r.hint || "")}。仅限本机使用。</div>`,
     foot: `<button class="btn btn-primary" data-act="close-modal">知道了</button>`,
   });
 }
@@ -1665,7 +1667,7 @@ async function remountAfterRepair() {
   const m = openModal({
     title: "正在重新挂载网络盘",
     sub: "WebDAV 组件已经修复，正在等待 Windows 客户端完成启动。",
-    body: `<div class="row" style="align-items:center;gap:10px">${spinner()}<b>正在重新连接本机只读网络盘…</b></div>
+    body: `<div class="row" style="align-items:center;gap:10px">${spinner()}<b>正在重新连接本机网络盘…</b></div>
       <div class="form-note mt16">通常几秒内完成。如果 Windows 刚重启过 WebClient，第一次连接可能需要稍等。</div>`,
   });
   try {
@@ -2035,6 +2037,15 @@ document.addEventListener("click", async (ev) => {
         const d = st.drive || {};
         const val = el.dataset.kind === "url" ? d.url : el.dataset.kind === "user" ? d.user : d.pass;
         await doCopy(val, el.dataset.kind === "url" ? "WebDAV 地址" : el.dataset.kind === "user" ? "用户名" : "密码");
+      } else if (act === "drive-cloud") {
+        try {
+          const want = !(st.drive && st.drive.cloud !== false);
+          await api.driveConfig({ cloud: want });
+          await refreshAll(); await render();
+          toast(want ? "已切换为云端盘" : "已切换为本机索引只读镜像", "ok");
+        } catch (err) {
+          toast(errMsg(err), "error", "切换失败");
+        }
       } else if (act === "drive-auto") {
         const d = st.drive || {};
         await api.driveConfig({ auto: !d.auto });

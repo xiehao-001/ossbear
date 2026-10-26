@@ -317,6 +317,8 @@ def _handler(agent, token):
                 kw = {}
                 if "auto" in data:
                     kw["drive_auto"] = bool(data.get("auto"))
+                if "cloud" in data:
+                    kw["drive_cloud"] = bool(data.get("cloud"))
                 if "letter" in data:
                     letter = str(data.get("letter") or "").strip().upper()
                     if letter and not (len(letter) in (1, 2) and letter[0].isalpha()):
@@ -395,6 +397,8 @@ def _handler(agent, token):
                 kw["quick_notify"] = bool(data.get("quick_notify"))
             if "quick_menu" in data:
                 kw["quick_menu"] = bool(data.get("quick_menu"))
+            if "drive_cloud" in data:
+                kw["drive_cloud"] = bool(data.get("drive_cloud"))
             a.save(**kw)
             return a.pubcfg()
 

@@ -342,6 +342,7 @@ def restore(agent, job, opts):
                 except Exception as ex:
                     errors.append("%s: 已迁回但删除云端副本失败 %s" % (p, _err(ex)))
                 else:
+                    agent.db.cd_del_key(e["key"])
                     agent.db.cloud_clear(p)
                     _rcloud(agent, p, "", "", "", 0, False, errors)
         except Exception as ex:
@@ -582,6 +583,7 @@ def saveedit(agent, path):
         if old_pid and _ok(agent, old_pid):
             try:
                 _s3(agent, old_pid).delete(old_key)
+                agent.db.cd_del_key(old_key)
             except Exception as e:
                 old_del = _err(e)
         else:
