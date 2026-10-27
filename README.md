@@ -36,6 +36,8 @@ npm start
 
 版本规则、产物保留和发布步骤见 [RELEASING.md](RELEASING.md)。提交信息请说明用户可见变化、测试方式和影响范围。
 
+接手本项目请先看 [HANDOVER.md](HANDOVER.md)：里面有部署拓扑、配置路径、发布流水线、运维命令与待办风险。
+
 ## 安全
 
 仓库中不得出现 Resend Key、云存储 AccessKey、GitHub Token、服务器环境文件或其他密钥。密钥只保存在部署服务器和用户本机的加密存储中。发现误提交时请立即轮换密钥并清理历史。
