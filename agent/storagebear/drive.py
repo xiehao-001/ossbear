@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import hmac
 import http.server
 import json
@@ -22,6 +23,7 @@ from . import ops, util
 
 DAV = "/dav"
 RANGE = re.compile(r"^bytes=(\d*)-(\d*)$")
+_STAGE_LOCK = threading.Lock()
 
 
 def _q(p):
@@ -489,12 +491,20 @@ class Drive:
             self.th = threading.Thread(target=self.srv.serve_forever, name="sb-dav", daemon=True)
             self.th.start()
             util.log("dav: http://127.0.0.1:%d%s" % (self.port, DAV))
-            if c.get("drive_auto") and os.name == "nt":
-                try:
-                    self.mount()
-                except Exception as e:
-                    util.log("auto mount: %s" % e)
             self.agent.cfg = c
+            try:
+                self.agent.db.cd_cleanup_pending(86400)
+            except Exception:
+                pass
+            if c.get("drive_auto") and os.name == "nt":
+                # 自动挂载可能等待 WebClient/盘符探测，不能阻塞本地 API 启动，
+                # 否则开机后的快速链接会报“本地代理启动超时”。
+                def _auto():
+                    try:
+                        self.mount()
+                    except Exception as e:
+                        util.log("auto mount: %s" % e)
+                threading.Thread(target=_auto, name="sb-auto-mount", daemon=True).start()
             return self.info()
 
     def stop(self):
@@ -1003,7 +1013,11 @@ def _handler(agent, user, pw, token=""):
             mtime = int(row.get("mtime") or 0)
             size = int(row.get("size") or 0)
             p = row.get("path") or ""
-            if not self._cmode() and os.path.isfile(p):
+            if row.get("pending"):
+                # 分段上传完成前不要暴露最终大小，避免客户端误判“已传完”。
+                size = 0
+                mtime = 0
+            elif not self._cmode() and os.path.isfile(p):
                 size = os.path.getsize(p)
                 mtime = int(os.path.getmtime(p))
             ctype = ops._mime(p)
@@ -1106,6 +1120,88 @@ def _handler(agent, user, pw, token=""):
                         raise RuntimeError("请求体不完整")
             return os.path.getsize(dst)
 
+        def _stage_clear(self, pid, disp):
+            d = util.path("tmp", "drive-stage")
+            h = hashlib.sha1((str(pid) + "/" + disp).encode("utf-8")).hexdigest()
+            for ext in (".part", ".json"):
+                try:
+                    os.remove(os.path.join(d, h + ext))
+                except OSError:
+                    pass
+
+        def _stage_put(self, pid, disp, name, tmp, start, end, total, key0=""):
+            d = util.path("tmp", "drive-stage")
+            os.makedirs(d, exist_ok=True)
+            h = hashlib.sha1((str(pid) + "/" + disp).encode("utf-8")).hexdigest()
+            part = os.path.join(d, h + ".part")
+            meta_p = os.path.join(d, h + ".json")
+            try:
+                with _STAGE_LOCK:
+                    meta = {}
+                    try:
+                        with open(meta_p, "r", encoding="utf-8") as f:
+                            meta = json.load(f)
+                    except Exception:
+                        pass
+                    if int(meta.get("total") or 0) != total or not os.path.exists(part):
+                        meta = {"total": total, "ranges": []}
+                        with open(part, "wb") as f:
+                            f.truncate(total)
+                    cur = agent.db.cd_get(pid, disp)
+                    if not cur or not cur.get("pending"):
+                        agent.db.cd_add(pid, disp, name, 0, key0, total, util.now(), pending=1)
+                    with open(tmp, "rb") as fi, open(part, "r+b") as fo:
+                        fo.seek(start)
+                        while True:
+                            b = fi.read(262144)
+                            if not b:
+                                break
+                            fo.write(b)
+                    rs = []
+                    for r in (meta.get("ranges") or []):
+                        if isinstance(r, list) and len(r) == 2:
+                            rs.append([int(r[0]), int(r[1])])
+                    rs.append([start, end])
+                    rs.sort()
+                    merged = []
+                    for a, b in rs:
+                        if merged and a <= merged[-1][1] + 1:
+                            if b > merged[-1][1]:
+                                merged[-1][1] = b
+                        else:
+                            merged.append([a, b])
+                    meta["ranges"] = merged
+                    complete = bool(merged) and merged[0][0] == 0 and merged[0][1] >= total - 1
+                    if not complete:
+                        with open(meta_p, "w", encoding="utf-8") as f:
+                            json.dump(meta, f)
+                        util.log("drive stage %s/%s ranges=%s total=%s" % (pid, disp, merged, total))
+                        return self._send(201, b"", extra={"ETag": '"pending-%s"' % total})
+                    key = key0 or ("_storagebear/drive/%s/%s/%s" % (
+                        pid, str((agent.cfg or {}).get("device_id") or "pc")[:32], disp))
+                    mtime = util.now()
+                    try:
+                        ops._s3(agent, pid).put_file(key, part, ops._mime(disp))
+                        agent.db.cd_add(pid, disp, name, 0, key, total, mtime, pending=0)
+                        if key0:
+                            agent.db.touch_key(key, total, mtime)
+                    except Exception as e:
+                        util.log("drive stage upload %s/%s: %s" % (pid, disp, e))
+                        return self._send(502, ("上传失败：%s" % e).encode("utf-8"))
+                    for x in (part, meta_p):
+                        try:
+                            os.remove(x)
+                        except OSError:
+                            pass
+                    util.log("drive stage done %s/%s (%d bytes)" % (pid, disp, total))
+                    self._send(201, b"", extra={"ETag": '"%x-%x"' % (total, mtime),
+                                               "Last-Modified": _date(mtime)})
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
         def do_PUT(self):
             if not self._cmode():
                 return self._write_denied()
@@ -1148,6 +1244,13 @@ def _handler(agent, user, pw, token=""):
                 except OSError:
                     pass
                 return self._send(400, ("上传中断：%s" % e).encode("utf-8"))
+            head = ""
+            try:
+                with open(tmp, "rb") as f:
+                    head = f.read(16).hex()
+            except Exception:
+                pass
+            util.log("dav put body %s/%s size=%s head=%s" % (pid, disp[:120], size, head or "-"))
             cr = re.match(r"\s*bytes\s+(\d+)-(\d+)/(\d+|\*)\s*$", cr_hdr, re.I) if cr_hdr else None
             start = end = total = None
             if cr:
@@ -1161,6 +1264,19 @@ def _handler(agent, user, pw, token=""):
                 except OSError:
                     pass
                 return self._send(201, b"", extra={"ETag": '"0-0"'})
+            if cr and (end < start or (total is not None and (start >= total or end >= total))):
+                util.log("dav put out-of-range %s/%s cr=%s" % (pid, disp, cr_hdr))
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return self._send(400, b"content-range out of bounds")
+            full_payload = bool(cr and start == 0 and (total is None or total == size) and size == end - start + 1)
+            if not cr or full_payload:
+                self._stage_clear(pid, disp)
+            if cr and not full_payload and total and (not row or row.get("pending") or int(row.get("size") or 0) == 0):
+                return self._stage_put(pid, disp, parts[-1], tmp, start, end, total,
+                                       (row or {}).get("object_key") or "")
             if cr and size != end - start + 1:
                 util.log("dav put bad range %s/%s size=%s cr=%s" % (pid, disp, size, cr_hdr))
                 try:
@@ -1352,7 +1468,10 @@ def _handler(agent, user, pw, token=""):
             p = row.get("path") or ""
             size = int(row.get("size") or 0)
             mtime = int(row.get("mtime") or 0)
-            if not self._cmode() and os.path.isfile(p):
+            if row.get("pending"):
+                size = 0
+                mtime = 0
+            elif not self._cmode() and os.path.isfile(p):
                 st = os.stat(p)
                 size, mtime = st.st_size, int(st.st_mtime)
             self.send_response(200)
@@ -1374,6 +1493,8 @@ def _handler(agent, user, pw, token=""):
             if kind != "file":
                 return self._send(404)
             if self._cmode():
+                if row.get("pending"):
+                    return self._send(404)
                 if row.get("object_key"):
                     return self._cloud(row)
                 return self._send(404)

@@ -45,12 +45,18 @@ CREATE TABLE IF NOT EXISTS clouddrive(
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  provider_id TEXT NOT NULL, parent TEXT NOT NULL DEFAULT '', path TEXT NOT NULL,
  name TEXT NOT NULL, is_dir INTEGER NOT NULL DEFAULT 0, object_key TEXT NOT NULL DEFAULT '',
- size INTEGER NOT NULL DEFAULT 0, mtime INTEGER NOT NULL DEFAULT 0,
+ size INTEGER NOT NULL DEFAULT 0, mtime INTEGER NOT NULL DEFAULT 0, pending INTEGER NOT NULL DEFAULT 0,
  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
  UNIQUE(provider_id, path)
 );
 CREATE INDEX IF NOT EXISTS idx_cd_parent ON clouddrive(provider_id,parent);
 """)
+            try:
+                cols = {r[1] for r in self.h.execute("PRAGMA table_info(clouddrive)")}
+                if "pending" not in cols:
+                    self.h.execute("ALTER TABLE clouddrive ADD COLUMN pending INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass
             self.h.commit()
 
     def close(self):
@@ -197,15 +203,15 @@ CREATE INDEX IF NOT EXISTS idx_cd_parent ON clouddrive(provider_id,parent);
     def cd_get(self, provider_id, path):
         return self.one("SELECT * FROM clouddrive WHERE provider_id=? AND path=?", (provider_id, path))
 
-    def cd_add(self, provider_id, path, name, is_dir, object_key="", size=0, mtime=0):
+    def cd_add(self, provider_id, path, name, is_dir, object_key="", size=0, mtime=0, pending=0):
         t = now()
         parent = path.rsplit("/", 1)[0] if "/" in path else ""
-        self.x("INSERT INTO clouddrive(provider_id,parent,path,name,is_dir,object_key,size,mtime,created_at,updated_at) "
-               "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider_id,path) DO UPDATE SET "
+        self.x("INSERT INTO clouddrive(provider_id,parent,path,name,is_dir,object_key,size,mtime,pending,created_at,updated_at) "
+               "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(provider_id,path) DO UPDATE SET "
                "parent=excluded.parent,name=excluded.name,is_dir=excluded.is_dir,object_key=excluded.object_key,"
-               "size=excluded.size,mtime=excluded.mtime,updated_at=excluded.updated_at",
+               "size=excluded.size,mtime=excluded.mtime,pending=excluded.pending,updated_at=excluded.updated_at",
                (provider_id, parent, path, name, 1 if is_dir else 0, object_key, int(size or 0),
-                int(mtime or 0), t, t))
+                int(mtime or 0), 1 if pending else 0, t, t))
 
     def cd_mkdirs(self, provider_id, path):
         parts = [x for x in str(path or "").split("/") if x]
@@ -260,6 +266,9 @@ CREATE INDEX IF NOT EXISTS idx_cd_parent ON clouddrive(provider_id,parent);
 
     def cd_del_provider(self, provider_id):
         self.x("DELETE FROM clouddrive WHERE provider_id=?", (provider_id,))
+
+    def cd_cleanup_pending(self, older=86400):
+        self.x("DELETE FROM clouddrive WHERE pending=1 AND updated_at<?", (now() - int(older),))
 
     def done_scan(self, sid):
         with self.lk:

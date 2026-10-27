@@ -121,21 +121,32 @@ function notifyQuick(title, body) {
   }
 }
 
+function logTail(name, n) {
+  try {
+    const lines = fs.readFileSync(path.join(DATA, "agent", "logs", name), "utf8").split(/\r?\n/);
+    return lines.slice(-(n || 12)).join("\n");
+  } catch (_) {
+    return "";
+  }
+}
+
 async function runQuickLink(file, standalone) {
-  let cfg = {};
-  try { cfg = await local("/api/config", "GET", undefined, 15000); } catch (_) {}
   try {
     if (!file) throw new Error("没有收到文件路径");
     const r = await local("/api/quick-link", "POST", { path: file }, 3600000);
     clipboard.writeText(r.url || "");
     log("quick link: " + file + " -> " + (r.provider_label || r.provider_id || ""));
+    let cfg = {};
+    try { cfg = await local("/api/config", "GET", undefined, 8000); } catch (_) {}
     if (cfg.quick_notify !== false) {
       notifyQuick("链接已复制", (r.name || path.basename(file)) + " · " + (r.provider_label || "云端") + "\n链接 6 天内有效，已写入剪贴板。");
     }
     if (standalone) setTimeout(() => { quitting = true; app.quit(); }, 1800);
   } catch (e) {
     log("quick link failed: " + file + " :: " + e.message);
-    dialog.showErrorBox("快速创建链接失败", e.message + "\n\n文件：" + file);
+    const tail = [logTail("desktop.log"), logTail("backend-stdout.log")].filter(Boolean).join("\n---\n");
+    dialog.showErrorBox("快速创建链接失败",
+      e.message + "\n\n文件：" + file + (tail ? "\n\n最近日志：\n" + tail.slice(-2200) : ""));
     if (standalone) setTimeout(() => { quitting = true; app.quit(); }, 2500);
   }
 }
@@ -245,6 +256,7 @@ async function backend() {
       args = ["--port", "0"];
     }
     const cwd = DEV ? path.join(__dirname, "..", "..", "agent") : path.dirname(exe);
+    log("backend spawn: " + cmd + " " + args.join(" "));
     child = spawn(cmd, args, {
       cwd,
       windowsHide: true,
@@ -263,7 +275,7 @@ async function backend() {
     });
     child.on("error", (e) => log("backend spawn error: " + e.message));
   }
-  const until = Date.now() + 25000;
+  const until = Date.now() + 40000;
   while (Date.now() < until) {
     const rt = readRuntime();
     if (rt && await ping(rt)) return rt;
