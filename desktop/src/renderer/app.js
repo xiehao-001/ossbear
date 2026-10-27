@@ -263,11 +263,15 @@ async function boot() {
   }
 }
 
+function serverBase() {
+  return String((st.info && st.info.server) || "http://47.100.27.233").replace(/\/+$/, "");
+}
+
 function showAuth(mode = "login") {
   if (codeTimer) { clearInterval(codeTimer); codeTimer = null; }
   $("#app").classList.add("hidden");
   $("#auth").classList.remove("hidden");
-  const server = localStorage.getItem("sb.server") || (st.info && st.info.publicUrl) || "http://www.ai-xiehao.me";
+  const server = serverBase();
   const login = mode === "login";
   const insecure = /^http:\/\//i.test(server);
   $("#auth").innerHTML = `
@@ -292,7 +296,6 @@ function showAuth(mode = "login") {
     <h2>${login ? "欢迎回来" : "创建你的存储熊账号"}</h2>
     <p class="sub">${login ? "登录这台电脑的本地代理，同步索引与设备信息。" : "一个账号管理多台电脑。手机访问正在开发中。请使用能长期使用的邮箱。"}</p>
     <form data-form="auth" data-mode="${login ? "login" : "register"}">
-      <div class="field"><label>服务器地址 <small>自建服务器可修改</small></label><input class="input" name="server" value="${e(server)}" placeholder="http://你的服务器" required></div>
       ${login ? "" : `<div class="field"><label>昵称</label><input class="input" name="name" maxlength="40" placeholder="例如：小王的电脑"></div>`}
       <div class="field"><label>邮箱</label><input class="input" type="email" name="email" placeholder="you@example.com" required autocomplete="username"></div>
       ${login ? "" : `<div class="field"><label>邮箱验证码</label><div class="auth-code"><input class="input" name="code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" placeholder="6 位验证码" required autocomplete="one-time-code"><button type="button" class="btn btn-ghost auth-send">获取验证码</button></div><small class="auth-tip">10 分钟内有效，没收到请检查垃圾邮件。</small></div>`}
@@ -302,7 +305,7 @@ function showAuth(mode = "login") {
       <button class="btn btn-primary btn-block btn-lg" type="submit">${login ? "登录存储熊" : "注册并开始"}</button>
     </form>
     <div class="form-note mt12"><b>安全提示：</b>对象存储 AccessKey 不会上传服务器；在 Windows 上由 DPAPI 加密保存在本机。请勿在公共电脑登录。</div>
-    ${insecure ? '<div class="form-note mt8" style="color:#b26a00"><b>当前服务器未启用 HTTPS：</b>登录密码与令牌在传输中不加密。仅在可信网络使用，或请部署者启用 HTTPS 后把服务器地址改为 https://。</div>' : ""}
+    ${insecure ? '<div class="form-note mt8" style="color:#b26a00"><b>当前服务器未启用 HTTPS：</b>登录密码与令牌在传输中不加密。仅在可信网络使用；域名备案完成并启用 HTTPS 后会自动切换。</div>' : ""}
     <div class="auth-foot">继续即表示同意 <button data-act="open-terms">服务条款</button> 与 <button data-act="open-privacy">隐私说明</button><br><button data-act="open-manual">查看小白使用手册</button> · <button data-act="open-site">了解存储熊</button></div>
   </div></section>`;
   const form = $('[data-form="auth"]');
@@ -343,7 +346,7 @@ async function sendAuthCode(form, btn) {
   btn.disabled = true;
   btn.textContent = "发送中…";
   try {
-    const r = await api.registerCode({ server: d.server, email: String(d.email).trim() });
+    const r = await api.registerCode({ server: serverBase(), email: String(d.email).trim() });
     authCodeWait(btn, Date.now() + (Number(r.cooldown) || 60) * 1000);
     toast("验证码已发送，请检查邮箱", "ok");
   } catch (err) {
@@ -374,11 +377,10 @@ async function submitAuth(ev) {
   btn.innerHTML = spinner() + " 正在连接";
   try {
     if (mode === "register") {
-      await api.register({ server: d.server, email: d.email, password: d.password, name: d.name || "", code: String(d.code).trim() });
+      await api.register({ server: serverBase(), email: d.email, password: d.password, name: d.name || "", code: String(d.code).trim() });
     } else {
-      await api.login({ server: d.server, email: d.email, password: d.password });
+      await api.login({ server: serverBase(), email: d.email, password: d.password });
     }
-    localStorage.setItem("sb.server", d.server.trim());
     await enterApp();
   } catch (err) {
     errBox.innerHTML = `<div class="err">${e(errMsg(err))}</div>`;
@@ -424,7 +426,7 @@ function chrome() {
   chip.querySelector("b").textContent = s.auth_error ? "需要重新登录" : "本地代理在线";
   const scanBtn = $('.top-actions [data-act="scan-modal"]');
   if (scanBtn) scanBtn.textContent = s.scanning ? "扫描进行中…" : "一键扫描";
-  if (st.info) document.title = "存储熊 · " + (st.info.publicUrl || "");
+  if (st.info) document.title = "存储熊 | storagebear";
 }
 
 function startPoll() {
@@ -687,8 +689,7 @@ function hostOf(u) {
   return String(u || "").replace(/^https?:\/\//i, "").replace(/\/+$/, "");
 }
 function siteUrl(path) {
-  const base = ((st.cfg && st.cfg.server) || (st.info && st.info.publicUrl) || "http://www.ai-xiehao.me").replace(/\/+$/, "");
-  return base + path;
+  return serverBase() + path;
 }
 
 async function viewCloud() {
