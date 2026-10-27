@@ -8,7 +8,7 @@
 - Windows 最新版：<http://www.ai-xiehao.me/updates/StorageBear-Setup-latest.exe>
 - 自动更新清单：<http://www.ai-xiehao.me/updates/latest.yml>
 
-从 0.2.0 起，客户端更新检查使用 `http://www.ai-xiehao.me/updates/`，不再依赖 GitHub Releases。GitHub Release 仅作为构建产物归档。
+从 0.2.0 起，客户端不再依赖 GitHub Releases；更新检查使用**当前登录服务器**的 `/updates/`，默认回退到官网 `http://www.ai-xiehao.me/updates/`。GitHub Release 仅作为构建产物归档。
 
 ## 目录
 

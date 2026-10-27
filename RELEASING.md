@@ -33,9 +33,9 @@
 
 ## 更新源
 
-- 客户端更新源：`http://www.ai-xiehao.me/updates/`
+- 客户端更新源：当前登录服务器的 `/updates/`，默认回退到 `http://www.ai-xiehao.me/updates/`。
 - 构建配置：`desktop/package.json` 的 `build.publish` 使用 generic provider。
-- 运行时配置：`desktop/src/main.js` 的 `autoUpdater.setFeedURL` 使用同一地址。
+- 运行时配置：`desktop/src/main.js` 先使用默认地址，读取 `/api/config` 后切换到实际登录服务器地址。
 - 不再把 GitHub Releases 作为客户端更新源。
 
 ## 密钥与仓库边界

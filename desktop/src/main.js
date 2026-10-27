@@ -442,6 +442,20 @@ function setupUpdates() {
   } catch (e) {
     updateLog("error", e);
   }
+  // 自托管部署可能使用域名或服务器 IP；更新源跟随实际登录的服务器地址，
+  // 避免把 www 写死在客户端后因 DNS/代理层返回 502。
+  local("/api/config", "GET", undefined, 8000).then((cfg) => {
+    const base = String((cfg && cfg.server) || "").replace(/\/+$/, "");
+    if (!/^https?:\/\//i.test(base)) return;
+    const url = base + "/updates/";
+    if (url === UPD_URL) return;
+    try {
+      autoUpdater.setFeedURL({ provider: "generic", url });
+      updateLog("info", "update feed " + url);
+    } catch (e) {
+      updateLog("error", e);
+    }
+  }).catch((e) => updateLog("warn", "update feed: " + e.message));
   autoUpdater.on("update-available", (info) => {
     manualCheck = false;
     showUpdate(info);
