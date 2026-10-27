@@ -1,7 +1,7 @@
 {
   "name": "storagebear",
   "productName": "存储熊",
-  "version": "0.1.17",
+  "version": "0.2.0",
   "description": "把火山、阿里、腾讯、华为等对象存储变成一块好用的虚拟磁盘",
   "main": "src/main.js",
   "author": "StorageBear",
@@ -47,10 +47,8 @@
     ],
     "publish": [
       {
-        "provider": "github",
-        "owner": "xiehao-001",
-        "repo": "ossbear-releases",
-        "releaseType": "release"
+        "provider": "generic",
+        "url": "http://www.ai-xiehao.me/updates/"
       }
     ],
     "win": {

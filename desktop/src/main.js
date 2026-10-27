@@ -11,7 +11,7 @@ const DEV = !app.isPackaged;
 const HIDDEN = process.argv.includes("--hidden");
 const QUICK = quickArg(process.argv);
 const QUICK_KEY = "HKCU\\Software\\Classes\\*\\shell\\StorageBearQuickLink";
-const UPD = { owner: "xiehao-001", repo: "ossbear-releases" };
+const UPD_URL = PUBLIC + "/updates/";
 const DATA = path.join(app.getPath("appData"), "StorageBear");
 app.setName("StorageBear");
 try { app.setPath("userData", DATA); } catch (_) {}
@@ -352,7 +352,7 @@ async function showUpdate(info) {
       type: "info",
       title: "发现新版本",
       message: "存储熊 " + info.version,
-      detail: "当前版本 " + app.getVersion() + "。更新会从 GitHub Releases 下载，完成后可重启安装。",
+      detail: "当前版本 " + app.getVersion() + "。更新会从存储熊官网下载，完成后可重启安装。",
       buttons: ["下载更新", "稍后"],
       defaultId: 0,
       cancelId: 1,
@@ -379,7 +379,7 @@ function updateError(e) {
   const head = raw.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)[0] || "未知错误";
   let msg;
   if (status === 404 || /\b404\b|not found/.test(low)) {
-    msg = "更新发布页暂时不可用（HTTP 404）。当前版本可以正常使用，这通常表示发布仓库还没有公开或尚未上传安装包。";
+    msg = "更新目录暂时不可用（HTTP 404）。当前版本可以正常使用，这通常表示服务器上还没有发布 latest.yml 或最新安装包。";
   } else if (/enotfound|eai_again|getaddrinfo/.test(low)) {
     msg = "无法解析更新服务器地址。请检查网络或稍后再试。";
   } else if (/etimedout|timeout|econnreset|econnrefused|socket hang up/.test(low)) {
@@ -396,7 +396,7 @@ function updateError(e) {
 
 async function checkUpdate(manual) {
   if (!updaterReady()) {
-    await askManual(manual, DEV ? "开发模式不检查更新" : "更新组件不可用", DEV ? "打包后的 Windows 客户端会从 GitHub Releases 检查更新。" : "当前安装可能缺少更新组件，请重新安装。");
+    await askManual(manual, DEV ? "开发模式不检查更新" : "更新组件不可用", DEV ? "打包后的客户端会从存储熊官网检查更新。" : "当前安装可能缺少更新组件，请重新安装。");
     return false;
   }
   if (updateBusy) return false;
@@ -438,7 +438,7 @@ function setupUpdates() {
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.allowDowngrade = false;
   try {
-    autoUpdater.setFeedURL({ provider: "github", owner: UPD.owner, repo: UPD.repo });
+    autoUpdater.setFeedURL({ provider: "generic", url: UPD_URL });
   } catch (e) {
     updateLog("error", e);
   }

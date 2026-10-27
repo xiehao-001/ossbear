@@ -7,7 +7,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: windows-installer-${{ github.ref }}
@@ -57,31 +57,49 @@ jobs:
             throw "未生成 latest.yml，自动更新不可用。请检查 desktop/package.json 的 build.publish 配置。"
           }
 
-      - name: 发布到更新仓库
+      - name: 发布公开构建产物
         if: startsWith(github.ref, 'refs/tags/v')
-        continue-on-error: true
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          $repo = 'xiehao-001/ossbear-releases'
-          if (-not $env:GH_TOKEN) {
-            Write-Warning "未配置 RELEASES_TOKEN，跳过 GitHub Releases 发布；安装包仍作为构建产物上传。"
-            exit 0
-          }
           $exe = Get-ChildItem desktop/release/StorageBear-Setup-*.exe | Select-Object -First 1
           if (-not $exe) { throw "未找到安装包。" }
           $files = @($exe.FullName, (Resolve-Path 'desktop/release/latest.yml').Path)
           Get-ChildItem desktop/release/*.blockmap -ErrorAction SilentlyContinue | ForEach-Object { $files += $_.FullName }
-          if (Test-Path desktop/release/SHA256.txt) { $files += (Resolve-Path 'desktop/release/SHA256.txt').Path }
-          gh release view $env:TAG --repo $repo 2>$null | Out-Null
+          if (Test-Path 'desktop/release/SHA256.txt') { $files += (Resolve-Path 'desktop/release/SHA256.txt').Path }
+          $sha = (Get-Content 'desktop/release/SHA256.txt' -Raw).Trim()
+          $notes = @"
+          Windows 安装包 $env:TAG
+          自动更新源：http://www.ai-xiehao.me/updates/
+          $sha
+          "@
+          gh release view $env:TAG --repo $env:REPO 2>$null | Out-Null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $env:TAG --repo $repo --title "存储熊 $env:TAG" --notes "Windows 安装包与自动更新元数据。下载并安装 StorageBear-Setup-*.exe；已安装较新版本的客户端会自动检查更新。"
+            gh release create $env:TAG --repo $env:REPO --title "存储熊 $env:TAG" --notes $notes
           }
-          gh release upload $env:TAG @files --repo $repo --clobber
-          if ($LASTEXITCODE -ne 0) { throw "上传 GitHub Release 失败。" }
-          Write-Host "已发布：https://github.com/$repo/releases/tag/$env:TAG"
+          gh release upload $env:TAG @files --repo $env:REPO --clobber
+          if ($LASTEXITCODE -ne 0) { throw "上传公开 Release 失败。" }
+
+      - name: 保留当前次版本最新 3 个 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if ($env:TAG -notmatch '^v(\d+)\.(\d+)\.') { exit 0 }
+          $prefix = "v$($matches[1]).$($matches[2])."
+          $all = gh release list --repo $env:REPO --limit 100 --json tagName,createdAt | ConvertFrom-Json
+          $cur = @($all | Where-Object { $_.tagName -like "$prefix*" } | Sort-Object { try { [version]($_.tagName.TrimStart('v')) } catch { [version]'0.0.0' } } -Descending)
+          $cur | Select-Object -Skip 3 | ForEach-Object {
+            Write-Host "删除过期 Release（保留 Git 标签）：$($_.tagName)"
+            gh release delete $_.tagName --repo $env:REPO --yes
+          }
 
       - name: 上传安装包
         uses: actions/upload-artifact@v4
@@ -89,6 +107,8 @@ jobs:
           name: StorageBear-Setup-${{ github.ref_name }}
           path: |
             desktop/release/StorageBear-Setup-*.exe
+            desktop/release/latest.yml
+            desktop/release/*.blockmap
             desktop/release/SHA256.txt
           if-no-files-found: error
           retention-days: 14
