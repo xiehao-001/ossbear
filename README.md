@@ -4,11 +4,12 @@
 
 ## 下载与更新
 
-- 官网与使用手册：<http://www.ai-xiehao.me>
-- Windows 最新版：<http://www.ai-xiehao.me/updates/StorageBear-Setup-latest.exe>
-- 自动更新清单：<http://www.ai-xiehao.me/updates/latest.yml>
+- 官网与使用手册：<http://47.100.27.233>（域名 `www.ai-xiehao.me` 正在 ICP 备案，恢复后以域名为准）
+- 火山引擎 TOS 接入图文教程：<http://47.100.27.233/guide>
+- Windows 最新版：<http://47.100.27.233/updates/StorageBear-Setup-latest.exe>
+- 自动更新清单：<http://47.100.27.233/updates/latest.yml>
 
-从 0.2.0 起，客户端不再依赖 GitHub Releases；更新检查使用**当前登录服务器**的 `/updates/`，默认回退到官网 `http://www.ai-xiehao.me/updates/`。GitHub Release 仅作为构建产物归档。
+从 0.2.0 起，客户端不再依赖 GitHub Releases；GitHub Release 仅作为构建产物归档。从 0.2.5 起，客户端内置服务器地址（`desktop/src/main.js` 的 `SERVER` 常量），登录页不再要求填写服务器地址，更新检查固定走该地址的 `/updates/`。
 
 ## 目录
 

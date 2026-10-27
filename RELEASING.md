@@ -34,10 +34,17 @@
 
 ## 更新源
 
-- 客户端更新源：当前登录服务器的 `/updates/`，默认回退到 `http://www.ai-xiehao.me/updates/`。
+- 客户端更新源：内置服务器的 `/updates/`。`desktop/src/main.js` 顶部的 `SERVER` 常量是唯一来源，`PUBLIC`、`UPD_URL` 与渲染进程的 `serverBase()` 都由它派生。
+- **备案期间**：`SERVER` 写死为服务器 IP `http://47.100.27.233`（`www.ai-xiehao.me` 尚在 ICP 备案，无法解析）。
+- **备案完成、域名启用 HTTPS 后**：把 `SERVER` 改回 `https://www.ai-xiehao.me`，并同步修改服务端 `/etc/storagebear/resend.env` 的 `SB_PUBLIC_URL`；登录页不再需要用户填写服务器地址，届时可移除 `SERVER` 常量的临时说明。
 - 构建配置：`desktop/package.json` 的 `build.publish` 使用 generic provider。
-- 运行时配置：`desktop/src/main.js` 先使用默认地址，读取 `/api/config` 后切换到实际登录服务器地址。
-- 不再把 GitHub Releases 作为客户端更新源。
+- 不再把 GitHub Releases 作为客户端更新源，也不再按登录服务器动态切换更新源。
+
+## 宣传页
+
+- 宣传页、手册与接入教程的源文件在服务器工作区 `/root/存储熊/server/web/`，部署目标 `/opt/storagebear/web/`（由 Nginx 直接提供）。
+- 教程截图在 `/root/guide-images/raw*.png`，脱敏脚本为 `/root/guide-images/mask.py`，导出到 `server/web/assets/guide/`；发布前必须确认账号、账号 ID、AccessKey/Secret、桶名均已不透明遮挡。
+- 页面新增路由需要在服务端 `src/main.cpp` 的 `staticFile()` 里登记（例如 `/guide → /guide.html`），否则会返回 404。
 
 ## 密钥与仓库边界
 
