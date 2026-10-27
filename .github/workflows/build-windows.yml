@@ -18,8 +18,8 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 40
     env:
-      ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
-      ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
 
     steps:
       - name: 检出代码
@@ -45,7 +45,12 @@ jobs:
           npm config set fetch-retry-maxtimeout 120000
           $ok = $false
           for ($i = 1; $i -le 3; $i++) {
-            npm install --no-audit --no-fund
+            if ($i -eq 2) {
+              Write-Warning "第一次失败，切换到 npmmirror registry 重试"
+              npm install --no-audit --no-fund --registry=https://registry.npmmirror.com
+            } else {
+              npm install --no-audit --no-fund
+            }
             if ($LASTEXITCODE -eq 0) { $ok = $true; break }
             Write-Warning "npm install 第 $i 次失败，准备重试"
             Start-Sleep -Seconds (5 * $i)
