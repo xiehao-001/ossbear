@@ -8,6 +8,7 @@
 - 向后兼容的缺陷修复、文档与构建修复提升修订号，例如 `0.2.0 → 0.2.1`。
 - 稳定公开发行后从 `1.0.0` 开始；之后不兼容变更提升主版本号。
 - Git 标签固定为 `vMAJOR.MINOR.PATCH`。标签只新增，不移动、不删除；不使用强制推送。
+- 修改 `desktop/package.json` 与 `desktop/package-lock.json` 的版本号时，**不要全局替换 `0.x.y`**：只需改顶层 `version` 和 `packages[""].version`，否则会误改依赖版本/范围，导致 `npm install` 失败。推荐使用 `npm version --no-git-tag-version X.Y.Z`。
 - 发布前必须同步以下位置：`agent/storagebear/__init__.py`、`desktop/package.json`、`desktop/package-lock.json`、`build-release.bat`、服务端版本号与网页文档版本号。
 
 ## 发布步骤
