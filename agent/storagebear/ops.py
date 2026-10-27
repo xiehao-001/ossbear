@@ -618,7 +618,8 @@ def serve(agent, t):
     r = agent.db.file(p)
     fid = pl.get("file_id") or (r.get("id") if r else "")
     arch = int((r or {}).get("archived") or 0)
-    if r and r.get("object_key") and r.get("provider_id") and _ok(agent, r["provider_id"]):
+    force = bool(pl.get("force_upload"))
+    if not force and r and r.get("object_key") and r.get("provider_id") and _ok(agent, r["provider_id"]):
         pid = r["provider_id"]
         k = r["object_key"]
         s3 = _s3(agent, pid)
@@ -639,8 +640,8 @@ def serve(agent, t):
         pid = pick(agent, {"provider_id": pl.get("provider_id") or (r or {}).get("provider_id")})
         s3 = _s3(agent, pid)
         k = (r or {}).get("object_key") if (r or {}).get("provider_id") == pid else ""
-        if not k:
-            k = key(p, "_storagebear/links")
+        if force or not k:
+            k = k or key(p, "_storagebear/links")
             s3.put_file(k, p, _mime(p))
     url, exp = link(s3, k)
     agent.db.cloud(p, pid, k, url, exp, arch)

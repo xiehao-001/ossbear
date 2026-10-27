@@ -241,9 +241,13 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 async function backend() {
   const old = readRuntime();
-  if (old && await ping(old)) return old;
-  try { fs.unlinkSync(runtimePath()); } catch (_) {}
-  if (!child) {
+  if (old && await ping(old, 4000)) return old;
+  const alive = !!child && child.exitCode === null;
+  if (!alive) {
+    // 只有确认没有存活子进程时才删除 runtime；否则一次瞬时 ping 失败会把
+    // 正在启动/忙碌的代理 runtime 删掉，后面的请求永远等不到新的 runtime。
+    try { fs.unlinkSync(runtimePath()); } catch (_) {}
+    child = null;
     const exe = path.join(process.resourcesPath, "backend", process.platform === "win32" ? "storagebear.exe" : "storagebear");
     let cmd;
     let args;
@@ -278,7 +282,7 @@ async function backend() {
   const until = Date.now() + 40000;
   while (Date.now() < until) {
     const rt = readRuntime();
-    if (rt && await ping(rt)) return rt;
+    if (rt && await ping(rt, 4000)) return rt;
     await sleep(300);
   }
   throw new Error("本地代理启动超时，请查看日志：" + path.join(DATA, "agent", "logs"));

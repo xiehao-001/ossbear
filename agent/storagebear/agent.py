@@ -257,7 +257,8 @@ class Agent:
         def fn(job):
             job.up(message="正在上传并创建链接")
             return ops.serve(self, {"kind": "upload", "payload": {
-                "path": p, "file_id": (r or {}).get("id", ""), "provider_id": provider_id}})
+                "path": p, "file_id": (r or {}).get("id", ""), "provider_id": provider_id,
+                "force_upload": os.path.isfile(p)}})
         return self.jobs.add("share", fn)
 
     def fetch(self, path):
@@ -322,14 +323,22 @@ class Agent:
                     "name": p.replace("\\", "/").rsplit("/", 1)[-1]}
         if not r and self.cfg.get("drive_cloud", True) and self._drive_cloud_parts(p):
             raise RuntimeError("虚拟盘文件没有可用的云端对象")
-        if not os.path.isfile(p) and not (r and r.get("object_key")):
+        local = os.path.isfile(p)
+        if not local and not (r and r.get("object_key")):
             raise RuntimeError("文件不存在")
-        # 已有云端副本时直接复用，避免为了一个链接再上传一份。
-        if r and r.get("object_key") and r.get("provider_id") and ops._ok(self, r["provider_id"]):
-            pid = r["provider_id"]
-        else:
+        if local:
+            # 快速链接必须反映当前本地内容；不能复用可能已过期或为空的旧对象。
             pid = provider_id or ops.pick_link(self)
-        res = ops.serve(self, {"kind": "upload", "payload": {"path": p, "provider_id": pid}})
+            res = ops.serve(self, {"kind": "upload", "payload": {
+                "path": p, "provider_id": pid, "force_upload": True}})
+        elif r and r.get("object_key") and r.get("provider_id") and ops._ok(self, r["provider_id"]):
+            pid = r["provider_id"]
+            url, exp = ops.link(ops._s3(self, pid), r["object_key"])
+            prov = self.db.prov(pid) or {}
+            return {"url": url, "expires_at": exp, "provider_id": pid,
+                    "provider_label": prov.get("label") or "", "name": os.path.basename(p)}
+        else:
+            raise RuntimeError("文件不在本机，也没有可用的云端副本")
         prov = self.db.prov(res.get("provider_id") or "") or {}
         return {"url": res.get("url") or "", "expires_at": int(res.get("expires_at") or 0),
                 "provider_id": res.get("provider_id") or "",
