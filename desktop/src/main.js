@@ -134,11 +134,66 @@ async function runQuickLink(file, standalone) {
     }
     if (standalone) setTimeout(() => { quitting = true; app.quit(); }, 1800);
   } catch (e) {
-    log("quick link failed: " + e.message);
-    if (cfg.quick_notify !== false) notifyQuick("快速创建链接失败", e.message);
-    else dialog.showErrorBox("快速创建链接失败", e.message);
+    log("quick link failed: " + file + " :: " + e.message);
+    dialog.showErrorBox("快速创建链接失败", e.message + "\n\n文件：" + file);
     if (standalone) setTimeout(() => { quitting = true; app.quit(); }, 2500);
   }
+}
+
+const LOG_FILES = {
+  agent: ["agent.log", "agent.log.1"],
+  backend: ["backend-stdout.log"],
+  desktop: ["desktop.log"],
+  webdav: ["webdav.log", "webdav.log.1"],
+  repair: ["repair-webdav.log"],
+};
+
+function cleanLogs(days, types) {
+  const dir = path.join(DATA, "agent", "logs");
+  const n = Math.max(1, Math.min(3650, Number(days) || 30));
+  const cutoff = Date.now() - n * 86400000;
+  const result = { ok: true, files: 0, bytes: 0, skipped: [], protected: ["迁移日志（本机数据库与云端 JSONL）"] };
+  const picked = Array.isArray(types) ? types.filter((t) => LOG_FILES[t]) : [];
+  const tsRe = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/;
+  for (const type of picked) {
+    for (const name of LOG_FILES[type]) {
+      const p = path.join(dir, name);
+      let st;
+      try { st = fs.statSync(p); } catch (_) { continue; }
+      if (!st.isFile()) continue;
+      let text;
+      try { text = fs.readFileSync(p, "utf8"); } catch (_) { result.skipped.push(name); continue; }
+      const lines = text.split(/\r?\n/);
+      let stamped = false;
+      const kept = [];
+      for (const line of lines) {
+        const m = line.match(tsRe);
+        if (!m) { kept.push(line); continue; }
+        stamped = true;
+        const t = new Date(m[1] + "T" + m[2]).getTime();
+        if (!isNaN(t) && t >= cutoff) kept.push(line);
+      }
+      let out;
+      if (!stamped) {
+        if (st.mtimeMs >= cutoff) { result.skipped.push(name); continue; }
+        out = "";
+      } else {
+        out = kept.join("\n");
+      }
+      if (out === text) { result.skipped.push(name); continue; }
+      try {
+        const tmp = p + ".clean";
+        fs.writeFileSync(tmp, out, "utf8");
+        fs.renameSync(tmp, p);
+        result.files += 1;
+        result.bytes += Math.max(0, st.size - Buffer.byteLength(out));
+      } catch (_) {
+        try { fs.unlinkSync(p + ".clean"); } catch (__) {}
+        result.skipped.push(name + "（正在使用，已跳过）");
+      }
+    }
+  }
+  return result;
 }
 
 function runtimePath() {
@@ -700,6 +755,12 @@ ipcMain.handle("sb:open-external", async (e, url) => {
   if (!/^https?:\/\//i.test(String(url || ""))) throw new Error("只允许打开网页链接");
   await shell.openExternal(url);
   return true;
+});
+
+ipcMain.handle("sb:clean-logs", (event, days, types) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  return cleanLogs(days, types);
 });
 
 ipcMain.handle("sb:set-quick-menu", (event, on) => {

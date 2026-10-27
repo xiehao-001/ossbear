@@ -463,6 +463,7 @@ textarea.input { resize: vertical; min-height: 76px; }
 .card-title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .card-title-row h3 { margin: 0; font-size: 13.5px; }
 .card-title-row p { margin: 3px 0 0; color: var(--faint); font-size: 10.5px; }
+.card-title-row > svg { width: 20px; height: 20px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .section-anchor { scroll-margin-top: 20px; }
 .inline-code { font-family: Consolas, monospace; background: #f4f5fa; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
 .phone-link-box { display: flex; align-items: center; gap: 9px; background: #f7f8fd; border: 1px dashed #d9deeb; border-radius: 11px; padding: 11px 13px; margin-top: 12px; }

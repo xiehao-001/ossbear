@@ -451,7 +451,11 @@ function setView(v) {
   $$("#nav .nav-item").forEach((b) => b.classList.toggle("on", b.dataset.view === v));
   $("#page-title").textContent = PAGE[v][0];
   $("#page-kicker").textContent = PAGE[v][1];
-  $("#view").scrollTop = 0;
+  const box = $("#view");
+  if (box) {
+    box.innerHTML = `<div class="view-inner"><div class="loading-block">${spinner()} 正在加载…</div></div>`;
+    box.scrollTop = 0;
+  }
   render();
 }
 
@@ -946,7 +950,7 @@ async function viewTransfer() {
     </div>
     ${res.remote_error ? `<div class="alert alert-warn mb16">${IC.warn}<div>服务器日志暂不可用：${e(res.remote_error)}。本机日志仍可正常使用。</div></div>` : ""}
     <div class="table-wrap">
-      <div class="toolbar"><b style="font-size:12.5px">迁移日志</b><span class="tag">${st.logs.length} 条</span><div class="spacer"></div><button class="btn btn-sm btn-ghost" data-act="refresh-view">${IC.refresh} 刷新</button><button class="btn btn-sm btn-ghost" data-act="restore-open">一键迁回</button></div>
+      <div class="toolbar"><b style="font-size:12.5px">迁移日志</b><span class="tag">${st.logs.length} 条</span><span class="tag green">永久保留</span><div class="spacer"></div><button class="btn btn-sm btn-ghost" data-act="refresh-view">${IC.refresh} 刷新</button><button class="btn btn-sm btn-ghost" data-act="restore-open">一键迁回</button></div>
       ${st.logs.length ? `<table class="tbl"><thead><tr><th style="width:140px">操作</th><th>云存储 / 日志</th><th style="width:140px">时间</th><th style="width:90px">文件</th><th style="width:80px">来源</th><th style="width:140px"></th></tr></thead><tbody>${st.logs.slice(0, 80).map(logRow).join("")}</tbody></table>` : `<div class="empty" style="padding:34px 20px"><div class="e-ic">${IC.upload}</div><b>还没有迁移记录</b><p>在文件库中选择本地文件迁出，日志会自动记录在这里并上传到云端。</p><button class="btn btn-sm" data-act="archive-open">迁出文件</button></div>`}
     </div>
     <div class="alert alert-info mt16">${IC.info}<div><b>日志如何帮助恢复？</b><br>迁出时，每批文件会在目标 Bucket 的 <span class="inline-code">_storagebear/logs/</span> 下写入 JSONL 清单，记录原路径、对象 Key、大小与云存储。迁回时按清单下载到原路径；即使本机重装，只要日志与密钥仍在，也能恢复。</div></div>
@@ -1342,6 +1346,21 @@ async function viewSettings() {
           </select></div>
           <div class="form-note mt12"><b>自动规则：</b>优先选择到期时间更晚的云存储，未填写到期时间视为无限；到期时间相同时，比较剩余容量（额度 - 已用），余量大的优先。剪贴板写入不可关闭。</div>
         </div>` : ""}
+        <div class="card card-pad mb16">
+          <div class="card-title-row"><div><h3>诊断日志清理</h3><p>只清理本机运行日志；迁移日志永久保留。</p></div><button class="btn btn-sm btn-ghost" data-act="open-logs">打开目录</button></div>
+          <div class="form-grid">
+            <div class="field"><label>清理早于</label><select class="select" id="log-days"><option value="7">7 天</option><option value="30" selected>30 天</option><option value="90">90 天</option><option value="180">180 天</option></select></div>
+            <div class="field full"><label>日志类型 <small>可多选</small></label><div class="chips">
+              <label class="chip" style="cursor:pointer"><input type="checkbox" name="logtype" value="agent" checked> 本地代理</label>
+              <label class="chip" style="cursor:pointer"><input type="checkbox" name="logtype" value="backend" checked> 后端输出</label>
+              <label class="chip" style="cursor:pointer"><input type="checkbox" name="logtype" value="desktop" checked> 桌面端</label>
+              <label class="chip" style="cursor:pointer"><input type="checkbox" name="logtype" value="webdav" checked> WebDAV 请求</label>
+              <label class="chip" style="cursor:pointer"><input type="checkbox" name="logtype" value="repair" checked> WebDAV 修复</label>
+            </div></div>
+          </div>
+          <div class="form-note mt8"><b>迁移日志不会被清理：</b>迁出/迁回记录保存在本机数据库，并在云端桶的 <code>_storagebear/logs/</code> 下持续保留；这里没有删除入口，也不会被清理功能触及。</div>
+          <button class="btn btn-sm btn-ghost mt12" data-act="logs-clean">清理选中日志</button>
+        </div>
         <div class="card card-pad">
           <div class="card-title-row"><div><h3>扫描目录与扩展名</h3><p>扫描只索引，不上传文件。</p></div><button class="btn btn-sm btn-ghost" data-act="settings-root-add">${IC.plus} 添加目录</button></div>
           ${roots.length ? `<div style="margin-bottom:12px">${roots.map((r) => `<div class="root-item">${IC.folder}<span class="path" title="${e(r.path)}">${e(r.path)}</span><span class="tag">${e(r.label || "目录")}</span><button class="btn btn-sm btn-icon btn-ghost" title="移除" data-act="settings-root-del" data-path="${au(r.path)}">${IC.trash}</button></div>`).join("")}</div>` : `<div class="banner-tip">${IC.info}<span>还没有常用目录。可以添加，也可以直接使用「一键扫描」的整盘模式。</span></div>`}
@@ -2082,6 +2101,25 @@ document.addEventListener("click", async (ev) => {
         await addSkips(dirs);
       } else if (act === "settings-ext-reset") {
         st.cfg = await api.saveConfig({ exts: EXT_COMMON }); await refreshAll(); await render(); toast("已恢复默认扩展名", "ok");
+      } else if (act === "logs-clean") {
+        const days = Number(($("#log-days") || {}).value || 30);
+        const types = $$('input[name="logtype"]:checked').map((x) => x.value);
+        if (!types.length) { toast("请至少选择一种日志", "error"); return; }
+        const labels = { agent: "本地代理", backend: "后端输出", desktop: "桌面端", webdav: "WebDAV 请求", repair: "WebDAV 修复" };
+        const ok = await confirmBox({
+          title: "清理诊断日志",
+          text: `将清理 ${days} 天前的${types.map((x) => labels[x] || x).join("、")}日志。迁移日志不会被删除，也不会影响文件或云存储。`,
+          ok: "开始清理", danger: true,
+        });
+        if (!ok) return;
+        try {
+          const r = await api.cleanLogs(days, types);
+          const skipped = (r.skipped || []).length;
+          toast(`已清理 ${r.files} 个文件，释放 ${fmtSize(r.bytes)}${skipped ? `；${skipped} 个文件正在使用，已跳过` : ""}`,
+                skipped ? "info" : "ok", "日志清理完成");
+        } catch (err) {
+          toast(errMsg(err), "error", "清理失败");
+        }
       } else if (act === "quick-menu") {
         if (st.info && st.info.dev) { toast("开发模式下不写注册表，安装版可用", "info"); return; }
         try {

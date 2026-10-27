@@ -1022,7 +1022,7 @@ def _handler(agent, user, pw, token=""):
                 self.close_connection = True
             allow = "OPTIONS, GET, HEAD, PROPFIND, PROPPATCH"
             if self._cmode():
-                allow += ", PUT, MKCOL"
+                allow += ", PUT, MKCOL, LOCK, UNLOCK"
             self._send(200, b"", extra={"Allow": allow})
 
         def do_PROPPATCH(self):
@@ -1048,7 +1048,7 @@ def _handler(agent, user, pw, token=""):
                 return self._deny()
             allow = "OPTIONS, GET, HEAD, PROPFIND, PROPPATCH"
             if self._cmode():
-                allow += ", PUT, MKCOL"
+                allow += ", PUT, MKCOL, LOCK, UNLOCK"
             self._send(405, b"operation not supported", extra={"Allow": allow})
 
         def _cloud_target(self, parts):
@@ -1134,6 +1134,11 @@ def _handler(agent, user, pw, token=""):
             d = util.path("tmp", "drive")
             os.makedirs(d, exist_ok=True)
             tmp = os.path.join(d, "up-%s.part" % secrets.token_hex(8))
+            cr_hdr = (self.headers.get("Content-Range") or "").strip()
+            util.log("dav put %s/%s len=%s cr=%s te=%s ua=%s" % (
+                pid, disp[:160], self.headers.get("Content-Length"),
+                cr_hdr[:80] or "-", (self.headers.get("Transfer-Encoding") or "-")[:40],
+                (self.headers.get("User-Agent") or "-")[:100]))
             try:
                 size = self._recv_body(tmp)
             except Exception as e:
@@ -1143,11 +1148,56 @@ def _handler(agent, user, pw, token=""):
                 except OSError:
                     pass
                 return self._send(400, ("上传中断：%s" % e).encode("utf-8"))
+            cr = re.match(r"\s*bytes\s+(\d+)-(\d+)/(\d+|\*)\s*$", cr_hdr, re.I) if cr_hdr else None
+            start = end = total = None
+            if cr:
+                start, end = int(cr.group(1)), int(cr.group(2))
+                total = int(cr.group(3)) if cr.group(3) != "*" else None
+            # Windows WebClient 可能先发一个 0 字节 PUT 做认证/占位；不要生成或覆盖出 0 字节幽灵文件。
+            if size == 0:
+                util.log("dav put ignored empty placeholder %s/%s (existing=%s)" % (pid, disp, bool(row)))
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return self._send(201, b"", extra={"ETag": '"0-0"'})
+            if cr and size != end - start + 1:
+                util.log("dav put bad range %s/%s size=%s cr=%s" % (pid, disp, size, cr_hdr))
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                return self._send(400, b"content-range size mismatch")
             key = (row or {}).get("object_key") or ("_storagebear/drive/%s/%s/%s" % (
                 pid, str((agent.cfg or {}).get("device_id") or "pc")[:32], disp))
-            mtime = util.now()
+            full = tmp
             try:
-                ops._s3(agent, pid).put_file(key, tmp, ops._mime(disp))
+                if cr and not (start == 0 and (total is None or total == size) and size == end - start + 1):
+                    full = tmp + ".full"
+                    need = max(end + 1, total or 0)
+                    src = None
+                    if row and row.get("object_key"):
+                        try:
+                            ops._s3(agent, pid).download(key, full)
+                            src = os.path.getsize(full)
+                        except Exception as e:
+                            util.log("dav put range base %s: %s" % (disp, e))
+                    if src is None:
+                        with open(full, "wb") as f:
+                            f.truncate(max(need, 0))
+                    elif need > src:
+                        with open(full, "r+b") as f:
+                            f.truncate(need)
+                    with open(tmp, "rb") as fi, open(full, "r+b") as fo:
+                        fo.seek(start)
+                        while True:
+                            b = fi.read(262144)
+                            if not b:
+                                break
+                            fo.write(b)
+                    size = max(os.path.getsize(full), need)
+                mtime = util.now()
+                ops._s3(agent, pid).put_file(key, full, ops._mime(disp))
                 agent.db.cd_add(pid, disp, parts[-1], 0, key, size, mtime)
                 if row and row.get("object_key") == key:
                     agent.db.touch_key(key, size, mtime)
@@ -1155,11 +1205,12 @@ def _handler(agent, user, pw, token=""):
                 util.log("drive put %s: %s" % (disp, e))
                 return self._send(502, ("上传失败：%s" % e).encode("utf-8"))
             finally:
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
-            util.log("drive put %s/%s (%d bytes)" % (pid, disp, size))
+                for f in (tmp, tmp + ".full"):
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        pass
+            util.log("drive put %s/%s (%d bytes, range %s)" % (pid, disp, size, cr_hdr or "-"))
             self._send(204 if row else 201, b"", extra={"ETag": '"%x-%x"' % (size, mtime),
                                                        "Last-Modified": _date(mtime)})
 
@@ -1192,10 +1243,27 @@ def _handler(agent, user, pw, token=""):
             self._write_denied()
 
         def do_LOCK(self):
-            self._write_denied()
+            if not self._cmode():
+                return self._write_denied()
+            self._drain()
+            if not self._allow():
+                return self._deny()
+            tok = "opaquelocktoken:" + secrets.token_hex(8)
+            body = ('<?xml version="1.0" encoding="utf-8"?><D:prop xmlns:D="DAV:"><D:lockdiscovery>'
+                    '<D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope>'
+                    '<D:depth>infinity</D:depth><D:timeout>Second-3600</D:timeout>'
+                    '<D:locktoken><D:href>%s</D:href></D:locktoken>'
+                    '</D:activelock></D:lockdiscovery></D:prop>') % tok
+            self._send(200, body.encode("utf-8"), 'application/xml; charset="utf-8"',
+                       extra={"Lock-Token": "<%s>" % tok})
 
         def do_UNLOCK(self):
-            self._write_denied()
+            if not self._cmode():
+                return self._write_denied()
+            self._drain()
+            if not self._allow():
+                return self._deny()
+            self._send(204)
 
         def do_POST(self):
             self._write_denied()

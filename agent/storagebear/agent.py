@@ -279,7 +279,7 @@ class Agent:
             if parts and parts[0].lower() == "dav":
                 parts = parts[1:]
             tok = str(self.cfg.get("drive_token") or "")
-            if tok and parts and parts[0] == tok:
+            if tok and parts and (parts[0] == tok or parts[0].rstrip(".") == tok):
                 parts = parts[1:]
             return parts
         raw = str(self.cfg.get("drive_letter") or "").strip()
