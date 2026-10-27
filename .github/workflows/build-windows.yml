@@ -38,7 +38,19 @@ jobs:
 
       - name: 安装 Electron 依赖
         working-directory: desktop
-        run: npm install --no-audit --no-fund
+        shell: pwsh
+        run: |
+          npm config set fetch-retries 5
+          npm config set fetch-retry-mintimeout 20000
+          npm config set fetch-retry-maxtimeout 120000
+          $ok = $false
+          for ($i = 1; $i -le 3; $i++) {
+            npm install --no-audit --no-fund
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Warning "npm install 第 $i 次失败，准备重试"
+            Start-Sleep -Seconds (5 * $i)
+          }
+          if (-not $ok) { throw "npm install 连续失败，请检查 npm registry 与网络。" }
 
       - name: 构建安装包
         shell: cmd
