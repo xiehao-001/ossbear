@@ -13,6 +13,9 @@ const HIDDEN = process.argv.includes("--hidden");
 const QUICK = quickParse(process.argv);
 // 「一键分享」与「迁移到其它盘」都注册在文件与文件夹两类右键菜单上，
 // 并且开启多选（MultiSelectModel=Player），一次可以把多个条目一起交给存储熊。
+// 注意：%* 会按空格重新切分参数，必须先把每个路径用引号包起来再追加，
+// 否则带空格的路径（如 "D:\新建 文件夹"）会被拆成两个不存在的路径。
+const MULTI_ARG = ' "%1" %*';
 const QUICK_KEYS = [
   "HKCU\\Software\\Classes\\*\\shell\\StorageBearQuickLink",
   "HKCU\\Software\\Classes\\Directory\\shell\\StorageBearQuickLink",
@@ -122,10 +125,10 @@ function quickMenuSet(on) {
     }
     // 多选时资源管理器会在 %1 之后再追加其余选中项，%* 一并接住
     for (const k of QUICK_KEYS) {
-      add(k, "存储熊：一键分享", '"' + exe + '" --quick-share "%1" %*', "Player");
+      add(k, "存储熊：一键分享", '"' + exe + '" --quick-share' + MULTI_ARG, "Player");
     }
     for (const k of MIGRATE_KEYS) {
-      add(k, "存储熊：迁移到其它盘并创建链接", '"' + exe + '" --quick-migrate "%1" %*', "Player");
+      add(k, "存储熊：迁移到其它盘并创建链接", '"' + exe + '" --quick-migrate' + MULTI_ARG, "Player");
     }
     log("quick menu registered");
     return true;
@@ -267,22 +270,35 @@ function robocopyCopy(src, dst) {
 
 function makeLink(src, dst, isDir) {
   return new Promise((resolve) => {
-    const inner = isDir ? 'mklink /J "' + src + '" "' + dst + '"' : 'mklink "' + src + '" "' + dst + '"';
-    let out = "";
-    let p;
-    try {
-      p = spawn("cmd.exe", ["/c", "chcp 65001>nul & " + inner], { windowsHide: true });
-    } catch (e) {
-      resolve({ ok: false, err: e.message });
-      return;
-    }
-    p.stdout.on("data", (d) => { out += d.toString(); });
-    p.stderr.on("data", (d) => { out += d.toString(); });
-    p.on("error", (e) => resolve({ ok: false, err: e.message }));
-    p.on("close", (code) => {
-      const ok = code === 0 && fs.existsSync(src);
-      resolve({ ok: ok, err: ok ? "" : (out.trim() || ("mklink 退出码 " + code)) });
+    const link = (cmd) => new Promise((done) => {
+      let out = "";
+      let p;
+      try {
+        p = spawn("cmd.exe", ["/c", "chcp 65001>nul & " + cmd], { windowsHide: true });
+      } catch (e) {
+        done({ ok: false, err: e.message });
+        return;
+      }
+      p.stdout.on("data", (d) => { out += d.toString(); });
+      p.stderr.on("data", (d) => { out += d.toString(); });
+      p.on("error", (e) => done({ ok: false, err: out + " " + e.message }));
+      p.on("close", (code) => {
+        const ok = code === 0 && fs.existsSync(src);
+        done({ ok: ok, err: ok ? "" : (out.trim() || ("退出码 " + code)) });
+      });
     });
+
+    (async () => {
+      if (!isDir) {
+        // 文件可以先试硬链接：同一卷、不需要管理员权限；跨盘会直接失败，再退回符号链接
+        const hr = await link('mklink /H "' + src + '" "' + dst + '"');
+        if (hr.ok) return { ok: true, hard: true };
+        const sr = await link('mklink "' + src + '" "' + dst + '"');
+        return { ok: sr.ok, hard: false, err: sr.ok ? "" : (hr.err + " / " + sr.err) };
+      }
+      const r = await link('mklink /J "' + src + '" "' + dst + '"');
+      return { ok: r.ok, hard: false, err: r.err };
+    })().then(resolve, (e) => resolve({ ok: false, err: e.message }));
   });
 }
 
@@ -341,7 +357,8 @@ async function migrateOne(src, target) {
     const lr = await makeLink(abs, dst, false);
     if (!lr.ok) {
       try { fs.copyFileSync(dst, abs); } catch (_) {}
-      throw new Error("文件已复制到 " + dst + "，但创建符号链接失败（需要管理员权限或开启开发者模式）："
+      throw new Error("文件已复制到 " + dst + "，但创建链接失败（硬链接与符号链接都不可用；"
+        + "跨盘符号链接需要管理员权限或开启 Windows 开发者模式）："
         + lr.err + "（已尝试复制回原位置）");
     }
   }
