@@ -323,6 +323,21 @@ git push origin main && git push origin v0.2.5
 
 **仍未验证**：真实云存储上的分享包上传与 6 天下载链接；多选右键菜单在资源管理器中的实际表现（需安装打包后的版本）。
 
+### 8.10 发布记录（2026-11-01）
+
+| 项目 | 状态 |
+| --- | --- |
+| 仓库 main | `9331e29`（含 `d9e9b60 feat: 0.3.0` 与迁移修复），已推送到 `git@github.com:xiehao-001/ossbear.git` |
+| 标签 | `v0.3.0` 已推送，GitHub Actions 运行 #25 全部步骤成功 |
+| 安装包 | `StorageBear-Setup-0.3.0.exe`（97,240,672 字节，SHA256 `923563F439FD10433F72324E53AB90C625A779078B206F871E6F1ECC71F1EA14`） |
+| 更新源 | `/opt/storagebear/web/updates/` 已放入 0.3.0 安装包 / blockmap / latest.yml / SHA256.txt，`StorageBear-Setup-latest.exe` 软链指向 0.3.0；sha512 与 GitHub Release 资产实测一致 |
+| 公开 Release | v0.3.0、v0.2.5、v0.2.4 三个，符合「保留最新 3 个」策略（v0.2.0 的 Release 待删，需要带 Token 的 `gh`，服务器上没有可用 Token） |
+| 服务端 | `src/main.cpp` 版本号改为 0.3.0 后重新编译部署；`/api/config` 返回 `version=0.3.0`、`public_url=http://47.100.27.233`；`systemctl is-active storagebear` = active |
+| 宣传站 | `/`、`/guide`、`/manual`、`/app`、`/privacy`、`/terms`、`/assets/guide/*.png` 全部 200，版本号均为 0.3.0；`/root/存储熊/server/web` 部署前已备份为 `web.bak-20261101-203904` |
+
+发布后仍需人工确认：装一次 0.3.0 安装包，检查设置页两张新卡片、右键菜单两项是否出现，以及从 0.2.5 自动更新到 0.3.0 是否正常。
+
+
 ---
 
 ## 9. 本次已完成（0.2.5）
@@ -347,10 +362,9 @@ git push origin main && git push origin v0.2.5
 | C++ 服务端未入库 | 服务端源码只在 `/root/存储熊/server`，公开仓库缺一半代码；确认是有意还是遗漏 | 高 |
 | 更新源域名不一致 | `desktop/package.json` 的 `build.publish.url` 仍是域名（仅影响 `latest.yml` 生成，运行时被 `setFeedURL` 覆盖），备案后需一并统一 | 中 |
 | 手机版 `/app` | 仍是「开发中」占位页 | 中 |
-| 服务端版本号未同步 | `main.cpp` 仍是 0.2.5，需重新编译部署到 0.3.0 | 高 |
-| 0.3.0 未发布 | 本地仓库已改完但未 push、未打 tag、未重新打包；`/updates/` 仍是 0.2.5 | 高 |
 | 右键菜单迁移未实测 | mklink 需要目录联接权限（junction 通常免管理员，文件符号链接需要管理员或开发者模式） | 中 |
 | Windows 实机回归 | 0.2.5 的安装、升级、虚拟盘挂载、快速链接尚未在 Windows 实机逐项验证（本次只验证了服务端与页面） | 中 |
+| v0.2.0 Release 未删 | 需带 Token 的 `gh release delete v0.2.0`，服务器无可用 Token | 低 |
 | 只保留三个安装包 | `/updates/` 与 GitHub Release 现为 0.2.5 / 0.2.4 / 0.2.0（0.2.1～0.2.3 打包失败无产物），已达上限；如需严格补丁滚动窗口要手动删 0.2.0，见 5.4 | 低 |
 | GitHub 直连受限 | 本机 `github.com` 443 超时，`api.github.com` 可用；大文件走 `gh-proxy.com`；`gh` CLI 未安装 | 低 |
 | 备份 | `/opt/storagebear/storagebear.bak-*` 已积累 6 个旧二进制，可按需清理 | 低 |
