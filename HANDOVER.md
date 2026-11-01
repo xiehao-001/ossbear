@@ -362,6 +362,19 @@ git push origin main && git push origin v0.2.5
 版本号已同步 0.3.1：`agent/storagebear/__init__.py`、`desktop/package.json`、`desktop/package-lock.json`（顶层与 `packages[""]`）、`build-release.bat`、宣传站页面。
 
 
+
+### 8.12 0.3.1 发布记录（2026-11-01）
+
+| 项目 | 状态 |
+| --- | --- |
+| 仓库 | `a7467fc fix: 0.3.1 ...` 已推送 main；标签 `v0.3.1` |
+| 打包 | Actions 运行 #26 全部成功，`StorageBear-Setup-0.3.1.exe` 97,240,815 字节，SHA256 `59773102F7085C64B1DE86B45F1E0AE5B5166BD3B7F298E31BFDF450CDD98A48`，sha512 与 latest.yml 实测一致 |
+| 更新源 | `/updates/` 已放到 0.3.1，`StorageBear-Setup-latest.exe` → 0.3.1；公网 `http://47.100.27.233/updates/latest.yml` 返回 `version: 0.3.1` |
+| 服务端 | 版本号改 0.3.1 后重新编译部署，`/api/config` 返回 `version=0.3.1`，服务 active（旧二进制备份 `storagebear.bak-0.2.5`） |
+| 宣传站 | `/`、`/manual`、`/privacy`、`/terms` 版本号均为 0.3.1；`/root/存储熊/server/web` 与仓库 `server-web/` 已同步 |
+
+升级方式：0.3.0 客户端托盘菜单点「检查更新」即可增量下载（约 11 MB），或直接下载安装包覆盖安装。
+
 ---
 
 ## 9. 本次已完成（0.2.5）
