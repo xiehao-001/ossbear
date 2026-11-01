@@ -269,37 +269,27 @@ function robocopyCopy(src, dst) {
 }
 
 function makeLink(src, dst, isDir) {
-  return new Promise((resolve) => {
-    const link = (cmd) => new Promise((done) => {
-      let out = "";
-      let p;
-      try {
-        p = spawn("cmd.exe", ["/c", "chcp 65001>nul & " + cmd], { windowsHide: true });
-      } catch (e) {
-        done({ ok: false, err: e.message });
-        return;
-      }
-      p.stdout.on("data", (d) => { out += d.toString(); });
-      p.stderr.on("data", (d) => { out += d.toString(); });
-      p.on("error", (e) => done({ ok: false, err: out + " " + e.message }));
-      p.on("close", (code) => {
-        const ok = code === 0 && fs.existsSync(src);
-        done({ ok: ok, err: ok ? "" : (out.trim() || ("退出码 " + code)) });
-      });
-    });
+  // 这里是不经过 cmd 的：V8 直接把 UTF-16 路径交给 Windows，
+  // 中文、空格、括号、全角标点都不会因为代码页转换而报「语法不正确」。
+  const attempt = (fn) => {
+    try {
+      fn();
+      return { ok: fs.existsSync(src), err: "" };
+    } catch (e) {
+      return { ok: false, err: (e && (e.message || e.code)) || String(e) };
+    }
+  };
+  const link = (type) => attempt(() => fs.symlinkSync(String(dst), String(src), type));
 
-    (async () => {
-      if (!isDir) {
-        // 文件可以先试硬链接：同一卷、不需要管理员权限；跨盘会直接失败，再退回符号链接
-        const hr = await link('mklink /H "' + src + '" "' + dst + '"');
-        if (hr.ok) return { ok: true, hard: true };
-        const sr = await link('mklink "' + src + '" "' + dst + '"');
-        return { ok: sr.ok, hard: false, err: sr.ok ? "" : (hr.err + " / " + sr.err) };
-      }
-      const r = await link('mklink /J "' + src + '" "' + dst + '"');
-      return { ok: r.ok, hard: false, err: r.err };
-    })().then(resolve, (e) => resolve({ ok: false, err: e.message }));
-  });
+  if (!isDir) {
+    // 文件可以先试硬链接：同一卷、不需要管理员权限；跨盘会直接失败，再退回符号链接
+    const hr = attempt(() => fs.linkSync(String(dst), String(src)));
+    if (hr.ok) return Promise.resolve({ ok: true, hard: true, err: "" });
+    const sr = link("file");
+    return Promise.resolve({ ok: sr.ok, hard: false, err: sr.ok ? "" : (hr.err + " / " + sr.err) });
+  }
+  const r = link("junction");
+  return Promise.resolve({ ok: r.ok, hard: false, err: r.err });
 }
 
 async function migrateOne(src, target) {
@@ -1014,10 +1004,16 @@ const gotLock = app.requestSingleInstanceLock({ quick: QUICK });
 if (!gotLock) {
   app.quit();
 } else {
-  app.on("second-instance", (event, argv, cwd, extra) => {
-    const target = (extra && extra.quick) || quickArg(argv);
-    if (target) {
-      runQuickLink(target, false);
+  app.on("second-instance", async (event, argv, cwd, extra) => {
+    // 右键菜单第二次点「一键分享」时，新进程把请求转给这个已运行的实例
+    const q = (extra && extra.quick) || quickParse(argv);
+    if (q && q.mode) {
+      try {
+        if (q.mode === "migrate") await runQuickMigrate(q.paths, false);
+        else await runQuickShare(q.paths, false);
+      } catch (e) {
+        log("quick(second-instance) failed: " + (e && e.message));
+      }
       return;
     }
     if (!win) {

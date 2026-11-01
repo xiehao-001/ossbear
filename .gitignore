@@ -18,3 +18,6 @@ desktop/resources/backend/
 # OS
 .DS_Store
 Thumbs.db
+
+# 运营网页源：与 /root/存储熊/server/web 同步，服务器部署目录 /opt/storagebear/web
+server-web/

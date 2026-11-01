@@ -337,6 +337,30 @@ git push origin main && git push origin v0.2.5
 
 发布后仍需人工确认：装一次 0.3.0 安装包，检查设置页两张新卡片、右键菜单两项是否出现，以及从 0.2.5 自动更新到 0.3.0 是否正常。
 
+**上机反馈（2026-11-01 21:49，0.3.0）**：
+
+1. `--quick-share` 崩溃：`ReferenceError: runQuickLink is not defined`（`main.js:1020`）。`second-instance` 分支里仍调用旧函数名与旧 `quickArg()`，任何一次右键分享只要主程序已在运行就会弹这个错误框。
+2. 迁移失败但**数据是安全的**：`mklink /J` 报「文件名、目录名或卷标语法不正确」，随后的回滚把内容完整复制回原位置（`E:\StorageBearLinks\...` 里会留下同名副本）。原因是该路径含中文与括号/空格时，`cmd /c` 的命令行按系统代码页解析，与应用进程的 UTF-8 参数编码不一致。
+
+### 8.11 0.3.1（2026-11-01，只修 bug）
+
+版本策略依用户要求：**修 bug 只加第三位，加功能加第二位，大版本不动**。
+
+| # | 修复 | 文件 |
+| --- | --- | --- |
+| 1 | `second-instance` 用回 `quickParse()` + `runQuickShare` / `runQuickMigrate`，右键分享在主程序已运行时不再报 `runQuickLink is not defined` | `desktop/src/main.js` |
+| 2 | `makeLink()` 不再经 `cmd /c mklink`，改用 `fs.symlinkSync(dst, src, "junction")`（目录）/ `"file"`（文件）：V8 直接传 UTF-16 路径，中文、空格、括号、全角标点都不会因代码页转换失败 | `desktop/src/main.js` |
+| 3 | 单文件先试 `fs.linkSync` 硬链接，失败再退回符号链接（同卷免管理员） | `desktop/src/main.js` |
+| 4 | 右键命令 ` "%1" %*` 给追加参数补引号，带空格的路径不再被 `%*` 拆开 | `desktop/src/main.js` |
+
+实机验证（本机 Windows，非管理员账户）：
+
+- `fs.symlinkSync(..., "junction")` 对 `教康论文`（中文）与 `教学论文 (2026版) 最终稿\子目录（含括号）`（中文 + 空格 + 括号 + 全角）均成功，链接内文件可正常读取；
+- 同卷 `fs.linkSync` 硬链接成功；跨盘硬链接按预期失败并自动退回符号链接；
+- 删除验收用的目录联接后，用户原件（64 个文件 / 180.8 MB）与 `E:\StorageBearLinks\C\Users\dell\Desktop\教康论文` 副本数量、大小一致，抽样 PDF 的 SHA256 一致。
+
+版本号已同步 0.3.1：`agent/storagebear/__init__.py`、`desktop/package.json`、`desktop/package-lock.json`（顶层与 `packages[""]`）、`build-release.bat`、宣传站页面。
+
 
 ---
 
