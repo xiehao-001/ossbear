@@ -8,6 +8,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const PRESETS = [
   { code: "volcengine", name: "火山引擎 TOS", short: "火", color: "#1664ff", endpoint: "https://tos-s3-cn-beijing.volces.com", region: "cn-beijing", style: "virtual", beta: true, note: "默认推荐。TOS 需要带 -s3- 的端点，仅支持虚拟主机样式；余额查询为 Beta，需要费用中心查询权限。" },
   { code: "aliyun", name: "阿里云 OSS", short: "阿", color: "#ff6a00", endpoint: "https://s3.oss-cn-hangzhou.aliyuncs.com", region: "cn-hangzhou", style: "path", note: "在 OSS 控制台创建 Bucket，并确认地域与 S3 兼容 Endpoint。" },
+  { code: "cloudflare", name: "Cloudflare R2", short: "R2", color: "#f38020", endpoint: "https://<账户ID>.r2.cloudflarestorage.com", region: "auto", style: "path", note: "Endpoint 要换成你自己的 R2 账户端点（包含账户 ID），Region 固定填 auto；AccessKey / SecretKey 来自 R2 控制台创建的 API 令牌，Bucket 名需与 R2 完全一致。" },
   { code: "tencent", name: "腾讯云 COS", short: "腾", color: "#1d7dfa", endpoint: "https://cos.ap-guangzhou.myqcloud.com", region: "ap-guangzhou", style: "virtual", note: "使用 COS 的 S3 兼容访问域名，按 Bucket 所在地域修改。" },
   { code: "huawei", name: "华为云 OBS", short: "华", color: "#cf0a2c", endpoint: "https://obs.cn-north-4.myhuaweicloud.com", region: "cn-north-4", style: "virtual", note: "以 OBS 控制台给出的 S3 兼容 Endpoint 为准。" },
   { code: "tianyi", name: "天翼云 OOS", short: "天", color: "#db0e2e", endpoint: "", region: "cn-shanghai", style: "virtual", note: "从 OOS 控制台获取 S3 兼容 Endpoint 后填写。" },
@@ -15,7 +16,7 @@ const PRESETS = [
   { code: "custom", name: "其他 S3 兼容", short: "S3", color: "#6b7280", endpoint: "", region: "us-east-1", style: "path", note: "填写标准 S3 兼容 Endpoint、Region 与 Bucket。" },
 ];
 
-const PCOL = { aliyun: "#ff6a00", tencent: "#1d7dfa", huawei: "#cf0a2c", volcengine: "#1664ff", tianyi: "#db0e2e", minio: "#c72c48", custom: "#6b7280" };
+const PCOL = { aliyun: "#ff6a00", tencent: "#1d7dfa", huawei: "#cf0a2c", volcengine: "#1664ff", tianyi: "#db0e2e", cloudflare: "#f38020", minio: "#c72c48", custom: "#6b7280" };
 const PAGE = {
   dashboard: ["工作台", "总览"],
   files: ["文件库", "扫描索引与云端副本"],
@@ -62,6 +63,7 @@ const st = {
   info: null, status: null, cfg: null, providers: [], stitches: [], devices: [],
   view: "dashboard", path: "", parent: "", q: "", filter: "all", status: "all", provider: "", sel: new Set(),
   entries: [], recent: [], logs: [], logRemote: [], drive: null, pick: [], dl: [], apps: [],
+  selfUse: null, migrateInfo: null,
   renderSeq: 0, poll: null, autoStart: false,
 };
 let codeTimer = null;
@@ -1309,6 +1311,7 @@ async function viewPhone() {
 /* ---------------- settings ---------------- */
 async function viewSettings() {
   try { st.info = await api.appInfo(); } catch (_) {}
+  if (!st.migrateInfo) { try { st.migrateInfo = await api.migrateInfo(); } catch (_) {} }
   const info = st.info || {};
   const s = st.status || {};
   const u = s.user || {};
@@ -1338,15 +1341,35 @@ async function viewSettings() {
           <div class="setting-row"><div class="setting-info"><b>本机数据目录</b><p class="mono tiny">${e(info.dataDir || "")}</p></div><div class="row"><button class="btn btn-sm btn-ghost" data-act="open-data">打开</button><button class="btn btn-sm btn-ghost" data-act="open-logs">日志</button></div></div>
         </div>
         ${(info.platform || "") === "win32" ? `<div class="card card-pad mb16">
-          <div class="card-title-row"><div><h3>资源管理器右键</h3><p>选中文件即可上传并创建分享链接。</p></div><span class="tag">Windows</span></div>
-          <div class="setting-row"><div class="setting-info"><b>显示「快速创建链接」</b><p>写入当前用户注册表，不需要管理员权限。链接创建后始终写入剪贴板。</p></div><button class="switch ${cfg.quick_menu !== false ? "on" : ""}" data-act="quick-menu" aria-label="切换右键菜单"></button></div>
+          <div class="card-title-row"><div><h3>资源管理器右键</h3><p>选中文件或文件夹右键，一步分享或迁移。</p></div><span class="tag">Windows</span></div>
+          <div class="setting-row"><div class="setting-info"><b>显示右键菜单</b><p>写入当前用户注册表，不需要管理员权限，支持多选。菜单项：「一键分享」与「迁移到其它盘并创建链接」。</p></div><button class="switch ${cfg.quick_menu !== false ? "on" : ""}" data-act="quick-menu" aria-label="切换右键菜单"></button></div>
           <div class="setting-row"><div class="setting-info"><b>创建后发送系统通知</b><p>关闭后只写剪贴板，不弹系统消息；失败提示仍会保留。</p></div><button class="switch ${cfg.quick_notify !== false ? "on" : ""}" data-act="quick-notify" aria-label="切换系统通知"></button></div>
-          <div class="field mt12"><label>快速创建链接使用的云存储 <small>可指定，也可自动选择</small></label><select class="select" data-quick-provider>
+          <div class="field mt12"><label>一键分享使用的云存储 <small>可指定，也可自动选择</small></label><select class="select" data-quick-provider>
             <option value="" ${!cfg.quick_link_provider ? "selected" : ""}>自动选择（到期时间优先，其次剩余容量）</option>
             ${(st.providers || []).map((p) => `<option value="${e(p.id)}" ${cfg.quick_link_provider === p.id ? "selected" : ""}>${e(p.label)}${p.has_key ? "" : "（缺少密钥）"}</option>`).join("")}
           </select></div>
-          <div class="form-note mt12"><b>自动规则：</b>优先选择到期时间更晚的云存储，未填写到期时间视为无限；到期时间相同时，比较剩余容量（额度 - 已用），余量大的优先。剪贴板写入不可关闭。</div>
+          <div class="form-note mt12"><b>分享规则：</b>单选一个文件时直接上传并返回链接；选中多个文件或文件夹时，自动打包成 zstd 压缩包（无损、体积约为 zip 的七成）后上传，链接 6 天内有效，并自动写入剪贴板。<br><b>迁移规则：</b>把内容搬到 D / E 等非系统盘，在原位置留下 mklink 链接，路径不变、程序照旧可用；系统目录、磁盘根目录与存储熊自身数据目录不允许迁移。</div>
         </div>` : ""}
+        ${(info.platform || "") === "win32" ? `<div class="card card-pad mb16">
+          <div class="card-title-row"><div><h3>盘间迁移（mklink）</h3><p>把 C 盘的大文件与文件夹搬到 D / E 盘，原位置变成链接。</p></div><span class="tag">${e((st.migrateInfo && st.migrateInfo.recommend) || "D:\\")}</span></div>
+          <div class="setting-row"><div class="setting-info"><b>推荐目标盘</b><p>${st.migrateInfo
+            ? (st.migrateInfo.drives || []).filter((d) => !d.system).map((d) => `${e(d.letter)}: 剩余 ${fmtSize(d.free)}`).join(" · ") || "没有可用的非系统盘"
+            : "点击下方按钮刷新磁盘剩余空间。"}</p></div><button class="btn btn-sm btn-ghost" data-act="migrate-info">${IC.refresh} 刷新</button></div>
+          <div class="row mt12"><button class="btn btn-sm" data-act="migrate-pick">${IC.drive} 选择文件或文件夹并迁移</button></div>
+          <div class="form-note mt12"><b>顺序：</b>先完整复制到目标盘 → 校验 → 删除原位置 → 在原位置创建链接。任何一步失败都会尽量把内容复制回原位并提示原因。目录使用 junction（不需要管理员），单个文件使用符号链接（需要管理员权限或开启开发者模式）。<br><b>注意：</b>迁移正在被程序占用的文件会失败，建议先关闭相关程序；不建议把 D / E 盘的内容迁移回 C 盘。</div>
+        </div>` : ""}
+        <div class="card card-pad mb16">
+          <div class="card-title-row"><div><h3>存储熊自身清理</h3><p>只清理程序自己的临时文件、缓存和旧日志。</p></div><button class="btn btn-sm btn-ghost" data-act="self-usage">${IC.refresh} 统计占用</button></div>
+          <div class="kv">
+            <dt>临时文件</dt><dd>${st.selfUse ? fmtSize((st.selfUse.agent && st.selfUse.agent.targets && st.selfUse.agent.targets.tmp && st.selfUse.agent.targets.tmp.bytes) || 0) : "未统计"}</dd>
+            <dt>缓存</dt><dd>${st.selfUse ? fmtSize((st.selfUse.agent && st.selfUse.agent.targets && st.selfUse.agent.targets.cache && st.selfUse.agent.targets.cache.bytes) || 0) : "未统计"}</dd>
+            <dt>日志</dt><dd>${st.selfUse ? fmtSize((st.selfUse.agent && st.selfUse.agent.targets && st.selfUse.agent.targets.logs && st.selfUse.agent.targets.logs.bytes) || 0) : "未统计"}</dd>
+            <dt>更新缓存</dt><dd>${st.selfUse ? fmtSize((st.selfUse.updater && st.selfUse.updater.bytes) || 0) : "未统计"}</dd>
+            <dt>合计</dt><dd><b>${st.selfUse ? fmtSize(((st.selfUse.agent && st.selfUse.agent.total) || 0) + ((st.selfUse.updater && st.selfUse.updater.bytes) || 0)) : "—"}</b></dd>
+          </div>
+          <div class="row mt12"><button class="btn btn-sm" data-act="self-clean">${IC.trash} 一键清理</button></div>
+          <div class="form-note mt12">清理范围：<code>tmp/</code> 临时下载与预览副本、<code>cache/</code> 缓存、超过保留天数的日志、已下载的更新包。不会删除任何索引记录、迁移日志或用户文件。</div>
+        </div>
         <div class="card card-pad mb16">
           <div class="card-title-row"><div><h3>诊断日志清理</h3><p>只清理本机运行日志；迁移日志永久保留。</p></div><button class="btn btn-sm btn-ghost" data-act="open-logs">打开目录</button></div>
           <div class="form-grid">
@@ -2121,6 +2144,65 @@ document.addEventListener("click", async (ev) => {
         } catch (err) {
           toast(errMsg(err), "error", "清理失败");
         }
+      } else if (act === "migrate-info") {
+        buttonBusy(el, true, "读取中");
+        try {
+          st.migrateInfo = await api.migrateInfo();
+          await render();
+        } catch (err) {
+          toast(errMsg(err), "error", "读取磁盘信息失败");
+        } finally { buttonBusy(el, false); }
+      } else if (act === "migrate-pick") {
+        let xs = [];
+        try { xs = await api.chooseAny(); } catch (err) { toast(errMsg(err), "error", "无法打开选择框"); return; }
+        if (!xs || !xs.length) return;
+        const drive = (st.migrateInfo && st.migrateInfo.recommend) || "D:\\";
+        const ok = await confirmBox({
+          title: "迁移到其它盘并创建链接",
+          text: `将把下面 ${xs.length} 项迁移到 ${drive}，并在原位置创建链接：\n\n${xs.slice(0, 6).join("\n")}${xs.length > 6 ? `\n…等 ${xs.length} 项` : ""}\n\n先复制、再校验、后删除原位置，任何一步失败都会尽量回滚。迁移期间请不要强制退出。`,
+          ok: "开始迁移", danger: true,
+        });
+        if (!ok) return;
+        buttonBusy(el, true, "迁移中");
+        try {
+          const r = await api.migrate(xs, {});
+          const items = r.items || [];
+          const bad = items.filter((x) => !x.ok);
+          if (bad.length) {
+            toast(`${r.moved}/${items.length} 项成功；失败示例：${errMsg(bad[0].error)}`, "error", "部分内容没有迁移成功");
+          } else {
+            toast(`${r.moved} 项已迁移到 ${r.target}，原位置已创建链接`, "ok", "迁移完成");
+          }
+          st.migrateInfo = await api.migrateInfo();
+          await render();
+        } catch (err) {
+          toast(errMsg(err), "error", "迁移失败");
+        } finally { buttonBusy(el, false); }
+      } else if (act === "self-usage") {
+        buttonBusy(el, true, "统计中");
+        try {
+          st.selfUse = await api.selfUsage();
+          await render();
+        } catch (err) {
+          toast(errMsg(err), "error", "统计失败");
+        } finally { buttonBusy(el, false); }
+      } else if (act === "self-clean") {
+        const days = Number(($("#log-days") || {}).value || 30);
+        const ok = await confirmBox({
+          title: "清理存储熊自身数据",
+          text: `将清理临时文件、缓存、超过 ${days} 天的运行日志，以及已下载的更新包。不会删除索引记录、迁移日志，也不会触碰任何用户文件。`,
+          ok: "开始清理", danger: true,
+        });
+        if (!ok) return;
+        buttonBusy(el, true, "清理中");
+        try {
+          const r = await api.selfClean({ days, types: ["tmp", "cache", "logs", "share"] });
+          st.selfUse = await api.selfUsage();
+          await render();
+          toast(`已释放 ${fmtSize(r.bytes)}`, "ok", "清理完成");
+        } catch (err) {
+          toast(errMsg(err), "error", "清理失败");
+        } finally { buttonBusy(el, false); }
       } else if (act === "quick-menu") {
         if (st.info && st.info.dev) { toast("开发模式下不写注册表，安装版可用", "info"); return; }
         try {
@@ -2217,7 +2299,7 @@ document.addEventListener("change", async (ev) => {
   if (qp) {
     try {
       st.cfg = await api.saveConfig({ quick_link_provider: qp.value || "" });
-      toast(qp.value ? "已指定快速链接使用的云存储" : "已改为自动选择", "ok");
+      toast(qp.value ? "已指定一键分享使用的云存储" : "已改为自动选择", "ok");
     } catch (err) {
       toast(errMsg(err), "error");
       await render();

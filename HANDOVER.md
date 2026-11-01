@@ -1,7 +1,7 @@
 # 存储熊 StorageBear 交接报告
 
-- 交接时间：2026-10-27
-- 当前版本：**0.2.5**（服务端 / 客户端 / 代理一致）
+- 交接时间：2026-10-27（2026-11-01 更新至 0.3.0）
+- 当前版本：**0.3.0**（客户端 / 代理已在本地仓库推进；服务端二进制仍是 0.2.5，见第 8 节）
 - 公开仓库：<https://github.com/xiehao-001/ossbear>（public，HTTPS/SSH：`git@github.com:xiehao-001/ossbear.git`）
 - 线上入口：`http://47.100.27.233`（域名 `www.ai-xiehao.me` 备案中，暂以 IP 代替）
 
@@ -246,7 +246,66 @@ git push origin main && git push origin v0.2.5
 
 ---
 
-## 8. 本次已完成（0.2.5）
+## 8. 本次已完成（0.3.0）
+
+> 本次改动全部在本地工作副本 `C:\Users\dell\Desktop\存储熊本地开发\sb\storagebear-github` 完成，**尚未 push、尚未重新打包、服务器未部署**。
+
+### 8.1 一键分享（右键，支持多选）
+
+- 注册表从「快速创建链接」升级为「一键分享」：`desktop/src/main.js` 的 `QUICK_KEYS` 同时写 `*\shell\StorageBearQuickLink` 与 `Directory\shell\StorageBearQuickLink`，命令 `"<exe>" --quick-share "%1" %*`，`MultiSelectModel=Player` 允许一次选中多个文件/文件夹（旧键 `LEGACY_QUICK_KEY` 会在写入前被删除）。
+- 新增 `agent/storagebear/pack.py`：把多个文件/文件夹打成一个包。优先 `zstandard`（`DEFAULT_LEVEL = 12`，多线程流式写入，边写边报进度）→ 缺模块时用系统自带 `C:\Windows\System32\tar.exe --zstd`（bsdtar 3.x 内置 libzstd，零依赖）→ 再不行回退 zip。包内保留相对目录结构，空目录也保留，临时包超过 1 天自动清理（`purge()`）。
+- 新增 `Agent.sharepack()` / `sharepack_job()`（`agent/storagebear/agent.py`）：**单文件直接走原来的直传逻辑**（`quicklink`，不打包），多文件/文件夹才打包；对象键 `_storagebear/shares/YYYYMM/<包名>`，Content-Type `application/zstd`，链接沿用 `ops.link()` 的 6 天有效期。
+- 新增本机接口：`POST /api/quick-share`（同步返回链接）、`POST /api/share-pack`（返回 job_id，前端可看进度）。
+- 客户端 `runQuickShare()`：结果写剪贴板并弹系统通知，提示「N 项已打包成 xxx（原始 → 压缩）」或「单文件直传」，独立进程模式 1.8s 后自动退出。
+
+### 8.2 盘间迁移（mklink）
+
+- 新增右键菜单「存储熊：迁移到其它盘并创建链接」（`--quick-migrate`，同样支持多选）。
+- 流程（`desktop/src/main.js` 的 `migrateOne()`）：校验（存在、非符号链接、非盘根、不在系统目录黑名单、不在存储熊数据目录）→ `robocopy /E /COPY:DAT` 复制到 `目标盘\StorageBearLinks\<源盘符>\<相对路径>` → 目录用 `fs.rmSync` 或文件比对大小后删除源 → `mklink /J`（目录联接）或 `mklink`（文件），链接失败自动把副本复制回去回滚。
+- 目标盘选择：排除系统盘 C 与源盘，优先用户指定，否则选剩余空间最大的盘（`migrateTarget()`）。
+- 黑名单 `MIGRATE_DENY`：`C:\Windows`、`C:\Program Files`、`C:\Program Files (x86)`、`C:\ProgramData`、`C:\$Recycle.Bin`、`C:\System Volume Information`、`C:\Recovery`、`C:\PerfLogs`；同时拒绝存储熊自身的 `%APPDATA%\StorageBear` 与 Electron `userData`。
+- 设置页新增「盘间迁移（mklink）」卡片，可查看各盘剩余空间、一键选文件/文件夹发起迁移。
+
+### 8.3 存储熊自身清理
+
+- 新增 `agent/storagebear/housekeeping.py`：统计并清理 `tmp/`、`cache/`、`logs/`、临时分享包（`pack.purge()`），可选 `vacuum` 压缩 SQLite；`clean(types, days)` 返回释放的字节数与文件数并写日志。
+- 新增接口 `GET /api/self-usage`、`POST /api/self-clean`。
+- 客户端 `selfClean()` 额外清理 electron-updater 缓存（`storagebear-updater`、`userData/pending`、`temp/storagebear-updater`）与诊断日志；设置页新增「存储熊自身清理」卡片，显示各处占用并可一键清理。
+- **只清理存储熊自己的痕迹**，不碰用户的索引文件、云端对象与其它目录。
+
+### 8.4 Cloudflare R2 预设
+
+- `agent/storagebear/presets.py` 与 `desktop/src/renderer/app.js` 的预设表新增 `cloudflare`：Endpoint `https://<账户ID>.r2.cloudflarestorage.com`、Region `auto`、路径样式。
+- 手册第 4 节新增 R2 卡片，`/guide` 新增 `#r2` 章节；首页「兼容清单」补上 R2。
+
+### 8.5 修复：设置页出现巨大黑色图形
+
+第 13 张截图里「还没有常用目录」「免扫路径」两处出现巨大黑圆和黑色尖顶块，原因是 `desktop/src/renderer/app.js` 的图标全是无 `width/height` 的内联 `<svg viewBox="0 0 24 24">`，而 `style.css` 只给部分容器（`.nav-item svg` 等）写了尺寸规则，`.banner-tip`、`.root-item` 没有任何规则：SVG 默认 `fill: black`、宽度撑满容器、高度按 viewBox 比例，于是 `IC.info` 的圆形变成直径约 340px 的黑色实心圆，`IC.shield` 变成被裁切的黑色盾形。
+
+修复：`desktop/src/renderer/style.css` 在 `img { max-width: 100%; }` 之后加全局兜底 `svg { width:16px; height:16px; flex:none; fill:none; stroke:currentColor; ... }`，并补 `.banner-tip svg`、`.root-item svg` 的具体尺寸（已用截图核对）。
+
+### 8.6 手册与宣传站
+
+- `/manual` 更新：第 6 节补「资源管理器右键：一键分享」「迁移到其它盘」，第 9 节补「盘间迁移（mklink）」，新增「存储熊自身清理」一节，第 4 节补 R2 与密钥申请指引。
+- `/guide` 补齐「申请密钥」的完整 13 步（IAM 用户 → 权限策略 → AccessKey → 建桶 → Endpoint/Region → 填进存储熊）与 Cloudflare R2 申请步骤。
+- 首页新增功能卡 08「右键一步：打包分享、盘间搬家」。
+
+### 8.7 版本号
+
+- 已同步提升到 **0.3.0**：`agent/storagebear/__init__.py`、`desktop/package.json`、`desktop/package-lock.json`（顶层与 `packages[""]`）、`build-release.bat`、宣传站所有页面。
+- **未完成**：服务端 `main.cpp` 的版本字段仍是 0.2.5，需要重新编译部署，否则 `/api/config` 返回的版本号会与新客户端不一致，发布前必须一并处理。
+
+### 8.8 验证情况
+
+- `node --check` 通过：`desktop/src/main.js`、`desktop/src/renderer/app.js`、`desktop/src/preload.js`。
+- `python -m py_compile` 通过：`agent/storagebear/{pack,housekeeping,agent,localapi,presets}.py`。
+- 代理接口在本机实测（`SB_HOME` 指向临时目录，端口 18099）：`/api/self-usage`、`/api/self-clean`（删除测试垃圾文件成功）、`/api/quick-share`（无云存储时返回可读中文错误）、`/api/share-pack`（job 状态可见）。
+- `pack.py` 单测：目录 + 中文文件名 → `.tar.zst`，解包内容与目录结构完全一致；禁用 `zstandard` 后走 bsdtar 仍产出 zstd（内容一致）；两者都不可用时回退 zip。
+- **未验证**：Windows 实机上的 mklink 迁移（需要管理员或开发者模式的真实卷）、右键菜单实际注册效果、真实云存储上传分享包。这三项需要在实机回归时逐条确认。
+
+---
+
+## 9. 本次已完成（0.2.5）
 
 1. 客户端登录界面移除「服务器地址」输入框，服务器地址内置为 `http://47.100.27.233`。
 2. 窗口标题与页面 `<title>` 统一为 `存储熊 | storagebear`。
@@ -260,7 +319,7 @@ git push origin main && git push origin v0.2.5
 
 ---
 
-## 9. 待办与风险
+## 10. 待办与风险
 
 | 事项 | 说明 | 优先级 |
 | --- | --- | --- |
@@ -268,6 +327,9 @@ git push origin main && git push origin v0.2.5
 | C++ 服务端未入库 | 服务端源码只在 `/root/存储熊/server`，公开仓库缺一半代码；确认是有意还是遗漏 | 高 |
 | 更新源域名不一致 | `desktop/package.json` 的 `build.publish.url` 仍是域名（仅影响 `latest.yml` 生成，运行时被 `setFeedURL` 覆盖），备案后需一并统一 | 中 |
 | 手机版 `/app` | 仍是「开发中」占位页 | 中 |
+| 服务端版本号未同步 | `main.cpp` 仍是 0.2.5，需重新编译部署到 0.3.0 | 高 |
+| 0.3.0 未发布 | 本地仓库已改完但未 push、未打 tag、未重新打包；`/updates/` 仍是 0.2.5 | 高 |
+| 右键菜单迁移未实测 | mklink 需要目录联接权限（junction 通常免管理员，文件符号链接需要管理员或开发者模式） | 中 |
 | Windows 实机回归 | 0.2.5 的安装、升级、虚拟盘挂载、快速链接尚未在 Windows 实机逐项验证（本次只验证了服务端与页面） | 中 |
 | 只保留三个安装包 | `/updates/` 与 GitHub Release 现为 0.2.5 / 0.2.4 / 0.2.0（0.2.1～0.2.3 打包失败无产物），已达上限；如需严格补丁滚动窗口要手动删 0.2.0，见 5.4 | 低 |
 | GitHub 直连受限 | 本机 `github.com` 443 超时，`api.github.com` 可用；大文件走 `gh-proxy.com`；`gh` CLI 未安装 | 低 |
@@ -275,7 +337,7 @@ git push origin main && git push origin v0.2.5
 
 ---
 
-## 10. 安全约束（务必遵守）
+## 11. 安全约束（务必遵守）
 
 - 仓库公开，**任何密钥都不得进仓库**：Resend Key、云存储 AccessKey/SecretKey、GitHub Token、SSH 私钥、服务器 `.env`、用户数据库、安装包签名材料。
 - 密钥只存在于部署服务器（`/etc/storagebear/resend.env`、数据库 `providers` 表）与用户本机加密存储。

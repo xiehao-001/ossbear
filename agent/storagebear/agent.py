@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 
-from . import VERSION, ops, scan, util
+from . import VERSION, housekeeping, ops, pack, scan, util
 from .drive import Drive, _cloud_roots
 from .jobs import Jobs
 from .localdb import DB
@@ -343,6 +343,64 @@ class Agent:
         return {"url": res.get("url") or "", "expires_at": int(res.get("expires_at") or 0),
                 "provider_id": res.get("provider_id") or "",
                 "provider_label": prov.get("label") or "", "name": os.path.basename(p)}
+
+    def sharepack(self, paths, provider_id="", job=None):
+        """一键分享：单文件直传，多个文件/文件夹先打包再上传。"""
+        if isinstance(paths, str):
+            paths = [paths]
+        ps = []
+        for x in (paths or []):
+            p = util.native(x)
+            if p and p not in ps:
+                ps.append(p)
+        if not ps:
+            raise RuntimeError("请选择要分享的文件或文件夹")
+        missing = [os.path.basename(p) for p in ps if not os.path.exists(p)]
+        ps = [p for p in ps if os.path.exists(p)]
+        if not ps:
+            raise RuntimeError("所选内容都不在本机了")
+        if len(ps) == 1 and os.path.isfile(ps[0]):
+            res = self.quicklink(ps[0], provider_id)
+            res["packed"] = False
+            res["items"] = 1
+            return res
+        if job:
+            job.up(message="正在压缩打包", progress=0)
+        info = pack.build(ps, job)
+        try:
+            pid = provider_id or ops.pick_link(self)
+            s3 = ops._s3(self, pid)
+            k = "_storagebear/shares/%s/%s" % (time.strftime("%Y%m"), info["name"])
+            ctype = "application/zstd" if info["engine"] == "zstd" else "application/zip"
+            if job:
+                job.up(message="正在上传压缩包", progress=96)
+            s3.put_file(k, info["path"], ctype)
+            url, exp = ops.link(s3, k)
+            prov = self.db.prov(pid) or {}
+            util.log("share pack: %d items -> %s (%s)" % (info["items"], info["name"], info["engine"]))
+            return {"url": url, "expires_at": exp, "provider_id": pid,
+                    "provider_label": prov.get("label") or "", "name": info["name"],
+                    "size": info["size"], "size_h": util.fmt_size(info["size"]),
+                    "bytes_in": info["bytes_in"], "engine": info["engine"],
+                    "items": info["items"], "packed": True, "missing": missing}
+        finally:
+            try:
+                os.remove(info["path"])
+            except OSError:
+                pass
+
+    def sharepack_job(self, paths, provider_id=""):
+        def fn(job):
+            return self.sharepack(paths, provider_id, job)
+        return self.jobs.add("share", fn)
+
+    def selfusage(self):
+        return housekeeping.usage({"db": util.path("index.db")})
+
+    def selfclean(self, types=None, days=7):
+        r = housekeeping.clean(types, days, {"db": util.path("index.db")})
+        r["usage_after"] = self.selfusage()
+        return r
 
     def link(self, path):
         if not str(path or "").strip():

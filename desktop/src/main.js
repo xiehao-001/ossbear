@@ -10,8 +10,18 @@ const SERVER = "http://47.100.27.233";
 const PUBLIC = SERVER;
 const DEV = !app.isPackaged;
 const HIDDEN = process.argv.includes("--hidden");
-const QUICK = quickArg(process.argv);
-const QUICK_KEY = "HKCU\\Software\\Classes\\*\\shell\\StorageBearQuickLink";
+const QUICK = quickParse(process.argv);
+// 「一键分享」与「迁移到其它盘」都注册在文件与文件夹两类右键菜单上，
+// 并且开启多选（MultiSelectModel=Player），一次可以把多个条目一起交给存储熊。
+const QUICK_KEYS = [
+  "HKCU\\Software\\Classes\\*\\shell\\StorageBearQuickLink",
+  "HKCU\\Software\\Classes\\Directory\\shell\\StorageBearQuickLink",
+];
+const MIGRATE_KEYS = [
+  "HKCU\\Software\\Classes\\*\\shell\\StorageBearMigrate",
+  "HKCU\\Software\\Classes\\Directory\\shell\\StorageBearMigrate",
+];
+const LEGACY_QUICK_KEY = "HKCU\\Software\\Classes\\*\\shell\\StorageBearQuickLink";
 const UPD_URL = PUBLIC + "/updates/";
 const DATA = path.join(app.getPath("appData"), "StorageBear");
 app.setName("StorageBear");
@@ -75,25 +85,48 @@ function autoStartSet(on) {
   return state;
 }
 
-function quickArg(argv) {
-  const i = (argv || []).indexOf("--quick-link");
-  return i >= 0 && argv[i + 1] ? argv[i + 1] : "";
+function quickParse(argv) {
+  const a = Array.isArray(argv) ? argv : [];
+  const i = a.findIndex((x) => /^--quick-(link|share|migrate)$/.test(String(x || "")));
+  if (i < 0) return { mode: "", paths: [] };
+  const mode = String(a[i]).replace("--quick-", "");
+  const paths = [];
+  for (let j = i + 1; j < a.length; j++) {
+    const s = a[j];
+    if (!s) continue;
+    if (String(s).startsWith("--")) break;
+    paths.push(String(s));
+  }
+  return { mode: mode, paths: paths };
 }
 
 function quickMenuSet(on) {
   if (process.platform !== "win32" || DEV) return false;
   const run = (args) => execFileSync("reg", args, { stdio: "ignore", windowsHide: true, timeout: 8000 });
+  const exe = process.execPath;
+  const del = (key) => {
+    try { run(["delete", key, "/f"]); } catch (_) {}
+  };
+  const add = (key, label, cmd, model) => {
+    run(["add", key, "/ve", "/d", label, "/f"]);
+    run(["add", key, "/v", "Icon", "/d", exe, "/f"]);
+    if (model) run(["add", key, "/v", "MultiSelectModel", "/d", model, "/f"]);
+    run(["add", key + "\\command", "/ve", "/d", cmd, "/f"]);
+  };
   try {
+    for (const k of QUICK_KEYS) del(k);
+    for (const k of MIGRATE_KEYS) del(k);
     if (!on) {
-      run(["delete", QUICK_KEY, "/f"]);
+      log("quick menu removed");
       return false;
     }
-    const exe = process.execPath;
-    const cmd = '"' + exe + '" --quick-link "%1"';
-    run(["add", QUICK_KEY, "/ve", "/d", "存储熊：快速创建链接", "/f"]);
-    run(["add", QUICK_KEY, "/v", "Icon", "/d", exe, "/f"]);
-    run(["add", QUICK_KEY, "/v", "MultiSelectModel", "/d", "Single", "/f"]);
-    run(["add", QUICK_KEY + "\\command", "/ve", "/d", cmd, "/f"]);
+    // 多选时资源管理器会在 %1 之后再追加其余选中项，%* 一并接住
+    for (const k of QUICK_KEYS) {
+      add(k, "存储熊：一键分享", '"' + exe + '" --quick-share "%1" %*', "Player");
+    }
+    for (const k of MIGRATE_KEYS) {
+      add(k, "存储熊：迁移到其它盘并创建链接", '"' + exe + '" --quick-migrate "%1" %*', "Player");
+    }
     log("quick menu registered");
     return true;
   } catch (e) {
@@ -131,25 +164,316 @@ function logTail(name, n) {
   }
 }
 
-async function runQuickLink(file, standalone) {
+function fmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v >= 1073741824) return (v / 1073741824).toFixed(2) + " GB";
+  if (v >= 1048576) return (v / 1048576).toFixed(1) + " MB";
+  if (v >= 1024) return (v / 1024).toFixed(0) + " KB";
+  return v + " B";
+}
+
+async function runQuickShare(paths, standalone) {
+  const list = (Array.isArray(paths) ? paths : [paths]).map((x) => String(x || "")).filter(Boolean);
   try {
-    if (!file) throw new Error("没有收到文件路径");
-    const r = await local("/api/quick-link", "POST", { path: file }, 3600000);
+    if (!list.length) throw new Error("没有收到文件路径");
+    const r = await local("/api/quick-share", "POST", { paths: list }, 3600000);
     clipboard.writeText(r.url || "");
-    log("quick link: " + file + " -> " + (r.provider_label || r.provider_id || ""));
+    log("quick share: " + list.join(" | ") + " -> " + (r.provider_label || r.provider_id || ""));
     let cfg = {};
     try { cfg = await local("/api/config", "GET", undefined, 8000); } catch (_) {}
     if (cfg.quick_notify !== false) {
-      notifyQuick("链接已复制", (r.name || path.basename(file)) + " · " + (r.provider_label || "云端") + "\n链接 6 天内有效，已写入剪贴板。");
+      let head;
+      if (r.packed) {
+        head = (r.items || list.length) + " 项已打包成 " + (r.name || "压缩包")
+          + "（" + fmtBytes(r.bytes_in) + " → " + fmtBytes(r.size) + "，" + (r.engine === "zstd" ? "zstd" : "zip") + "）";
+      } else {
+        head = (r.name || path.basename(list[0])) + " · " + (r.provider_label || "云端");
+      }
+      notifyQuick("分享链接已复制", head + "\n链接 6 天内有效，已写入剪贴板。");
     }
     if (standalone) setTimeout(() => { quitting = true; app.quit(); }, 1800);
+    return r;
   } catch (e) {
-    log("quick link failed: " + file + " :: " + e.message);
+    log("quick share failed: " + list.join(" | ") + " :: " + e.message);
     const tail = [logTail("desktop.log"), logTail("backend-stdout.log")].filter(Boolean).join("\n---\n");
-    dialog.showErrorBox("快速创建链接失败",
-      e.message + "\n\n文件：" + file + (tail ? "\n\n最近日志：\n" + tail.slice(-2200) : ""));
+    dialog.showErrorBox("一键分享失败",
+      e.message + "\n\n内容：" + list.join("\n") + (tail ? "\n\n最近日志：\n" + tail.slice(-2200) : ""));
     if (standalone) setTimeout(() => { quitting = true; app.quit(); }, 2500);
+    throw e;
   }
+}
+
+// ---------- 盘间迁移（mklink 快捷方式） ----------
+
+const MIGRATE_DIR = "StorageBearLinks";
+const MIGRATE_DENY = [
+  "c:\\windows", "c:\\program files", "c:\\program files (x86)", "c:\\programdata",
+  "c:\\$recycle.bin", "c:\\system volume information", "c:\\recovery", "c:\\perflogs",
+];
+
+function freeBytes(root) {
+  try {
+    const s = fs.statfsSync(root);
+    return Number(s.bavail) * Number(s.bsize);
+  } catch (_) {
+    return 0;
+  }
+}
+
+function driveList() {
+  const out = [];
+  for (const c of "CDEFGHIJKLMNOPQRSTUVWXYZ") {
+    const root = c + ":\\";
+    try { fs.accessSync(root); } catch (_) { continue; }
+    out.push({ root: root, letter: c, free: freeBytes(root), system: c === "C" });
+  }
+  return out;
+}
+
+async function migrateTarget(source, prefer) {
+  const srcRoot = path.parse(path.resolve(String(source || ""))).root.toUpperCase();
+  const cands = driveList().filter((d) => !d.system && d.root !== srcRoot);
+  if (!cands.length) throw new Error("没有可用的目标盘：迁移目标必须是 D / E 等非系统盘，且不能与源同盘");
+  const want = String(prefer || "").trim().toUpperCase();
+  if (want) {
+    const hit = cands.find((d) => d.letter === want[0]);
+    if (hit) return hit;
+  }
+  cands.sort((a, b) => b.free - a.free);
+  return cands[0];
+}
+
+function safeCell(p) {
+  return String(p || "").replace(/[\r\n]+/g, " ");
+}
+
+function robocopyCopy(src, dst) {
+  return new Promise((resolve) => {
+    let out = "";
+    let p;
+    try {
+      p = spawn("robocopy", [src, dst, "/E", "/COPY:DAT", "/DCOPY:DAT", "/R:1", "/W:1",
+        "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XJ"], { windowsHide: true });
+    } catch (e) {
+      resolve({ code: 16, out: e.message });
+      return;
+    }
+    p.stdout.on("data", (d) => { out += d.toString(); });
+    p.stderr.on("data", (d) => { out += d.toString(); });
+    p.on("error", (e) => resolve({ code: 16, out: out + " " + e.message }));
+    p.on("close", (code) => resolve({ code: code == null ? 16 : code, out: out }));
+  });
+}
+
+function makeLink(src, dst, isDir) {
+  return new Promise((resolve) => {
+    const inner = isDir ? 'mklink /J "' + src + '" "' + dst + '"' : 'mklink "' + src + '" "' + dst + '"';
+    let out = "";
+    let p;
+    try {
+      p = spawn("cmd.exe", ["/c", "chcp 65001>nul & " + inner], { windowsHide: true });
+    } catch (e) {
+      resolve({ ok: false, err: e.message });
+      return;
+    }
+    p.stdout.on("data", (d) => { out += d.toString(); });
+    p.stderr.on("data", (d) => { out += d.toString(); });
+    p.on("error", (e) => resolve({ ok: false, err: e.message }));
+    p.on("close", (code) => {
+      const ok = code === 0 && fs.existsSync(src);
+      resolve({ ok: ok, err: ok ? "" : (out.trim() || ("mklink 退出码 " + code)) });
+    });
+  });
+}
+
+async function migrateOne(src, target) {
+  const abs = path.resolve(String(src || ""));
+  if (!abs) throw new Error("路径为空");
+  if (!fs.existsSync(abs)) throw new Error("路径不存在：" + abs);
+  const st = fs.lstatSync(abs);
+  if (st.isSymbolicLink()) throw new Error("这已经是一个链接，不需要迁移：" + abs);
+  const parsed = path.parse(abs);
+  if (parsed.dir === parsed.root) throw new Error("不能迁移磁盘根目录：" + abs);
+  const lower = abs.toLowerCase();
+  if (MIGRATE_DENY.some((d) => lower === d || lower.startsWith(d + "\\"))) {
+    throw new Error("系统目录不允许迁移：" + abs);
+  }
+  if (lower.startsWith(DATA.toLowerCase()) || lower.startsWith(app.getPath("userData").toLowerCase())) {
+    throw new Error("存储熊自身的数据目录不能迁移：" + abs);
+  }
+  const srcRoot = parsed.root.toUpperCase();
+  if (srcRoot === String(target).toUpperCase()) throw new Error("源和目标在同一个盘：" + srcRoot);
+  const letter = srcRoot.replace(/[\\/:]/g, "").toUpperCase();
+  const dst = path.join(target, MIGRATE_DIR, letter, abs.slice(parsed.root.length));
+  if (fs.existsSync(dst)) throw new Error("目标位置已有同名内容，请先处理后重试：" + dst);
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  const isDir = st.isDirectory();
+  const needs = isDir ? 0 : st.size;
+  const free = freeBytes(target);
+  if (needs && free && free < needs + 64 * 1024 * 1024) {
+    throw new Error("目标盘空间不足：" + fmtBytes(free) + " 可用");
+  }
+  if (isDir) {
+    const r = await robocopyCopy(abs, dst);
+    if (r.code >= 8) {
+      try { fs.rmSync(dst, { recursive: true, force: true }); } catch (_) {}
+      throw new Error("复制失败（robocopy " + r.code + "）：" + r.out.slice(-300));
+    }
+    try {
+      fs.rmSync(abs, { recursive: true, force: false });
+    } catch (e) {
+      throw new Error("已复制到 " + dst + "，但删除原目录失败（可能被占用），请关闭占用程序后重试：" + e.message);
+    }
+    const lr = await makeLink(abs, dst, true);
+    if (!lr.ok) {
+      await robocopyCopy(dst, abs);
+      throw new Error("内容已复制到 " + dst + "，但创建目录链接失败：" + lr.err + "（已尝试复制回原位置）");
+    }
+  } else {
+    await fs.promises.copyFile(abs, dst);
+    let a = 0, b = 0;
+    try { a = fs.statSync(abs).size; b = fs.statSync(dst).size; } catch (_) {}
+    if (a !== b) {
+      try { fs.rmSync(dst, { force: true }); } catch (_) {}
+      throw new Error("文件复制校验失败，已放弃迁移");
+    }
+    fs.rmSync(abs, { force: true });
+    const lr = await makeLink(abs, dst, false);
+    if (!lr.ok) {
+      try { fs.copyFileSync(dst, abs); } catch (_) {}
+      throw new Error("文件已复制到 " + dst + "，但创建符号链接失败（需要管理员权限或开启开发者模式）："
+        + lr.err + "（已尝试复制回原位置）");
+    }
+  }
+  log("migrate: " + safeCell(abs) + " -> " + safeCell(dst));
+  return { source: abs, target: dst, isDir: isDir, ok: true };
+}
+
+async function migratePaths(paths, opts) {
+  const list = (Array.isArray(paths) ? paths : [paths]).map((x) => String(x || "")).filter(Boolean);
+  if (!list.length) throw new Error("没有收到要迁移的路径");
+  const first = list.find((p) => fs.existsSync(p)) || list[0];
+  const drive = await migrateTarget(first, (opts || {}).target);
+  const items = [];
+  for (const p of list) {
+    try {
+      items.push(await migrateOne(p, drive.root));
+    } catch (e) {
+      log("migrate failed: " + safeCell(p) + " :: " + e.message);
+      items.push({ source: p, ok: false, error: e.message });
+    }
+  }
+  const okN = items.filter((x) => x.ok).length;
+  log("migrate done: " + okN + "/" + items.length + " -> " + drive.root);
+  return { target: drive.root, free: drive.free, moved: okN, items: items };
+}
+
+async function runQuickMigrate(paths, standalone) {
+  const list = (Array.isArray(paths) ? paths : [paths]).map((x) => String(x || "")).filter(Boolean);
+  const fin = (ms) => { if (standalone) setTimeout(() => { quitting = true; app.quit(); }, ms || 2000); };
+  try {
+    if (!list.length) throw new Error("没有收到文件路径");
+    const drive = await migrateTarget(list[0], "");
+    const r = await dialog.showMessageBox({
+      type: "warning",
+      title: "迁移到其它盘并创建链接",
+      message: "把下面 " + list.length + " 项迁移到 " + drive.root + " 吗？（剩余 " + fmtBytes(drive.free) + "）",
+      detail: list.map(safeCell).join("\n")
+        + "\n\n迁移后原位置会变成一个指向新位置的链接，程序、快捷方式和索引里的路径都照旧可用。"
+        + "\n建议先关闭正在使用这些文件的程序；迁移期间请不要强制退出存储熊。",
+      buttons: ["开始迁移", "取消"],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    });
+    if (r.response !== 0) { fin(200); return { canceled: true }; }
+    const res = await migratePaths(list, { target: drive.root });
+    const bad = res.items.filter((x) => !x.ok);
+    if (bad.length) {
+      dialog.showErrorBox("部分内容没有迁移成功",
+        bad.map((x) => safeCell(x.source) + "\n  " + x.error).join("\n\n"));
+    } else {
+      notifyQuick("迁移完成", res.moved + " 项已迁移到 " + res.target + "，原位置已创建链接。");
+    }
+    fin(1500);
+    return res;
+  } catch (e) {
+    log("quick migrate failed: " + e.message);
+    dialog.showErrorBox("迁移失败", e.message);
+    fin(2000);
+    return { error: e.message };
+  }
+}
+
+// ---------- 自身清理 ----------
+
+function updaterCacheDirs() {
+  const out = [];
+  const add = (p) => { if (p && !out.includes(p)) out.push(p); };
+  add(path.join(app.getPath("userData"), "..", "storagebear-updater"));
+  add(path.join(app.getPath("userData"), "pending"));
+  try { add(path.join(app.getPath("temp"), "storagebear-updater")); } catch (_) {}
+  return out;
+}
+
+function dirSize(p) {
+  let total = 0, files = 0;
+  try {
+    if (fs.statSync(p).isFile()) return { bytes: fs.statSync(p).size, files: 1 };
+  } catch (_) { return { bytes: 0, files: 0 }; }
+  const walk = (d) => {
+    let names = [];
+    try { names = fs.readdirSync(d, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of names) {
+      const q = path.join(d, e.name);
+      try {
+        if (e.isDirectory()) walk(q);
+        else { total += fs.statSync(q).size; files += 1; }
+      } catch (_) {}
+    }
+  };
+  walk(p);
+  return { bytes: total, files: files };
+}
+
+function updaterCacheInfo() {
+  const items = updaterCacheDirs().map((p) => Object.assign({ path: p }, dirSize(p)));
+  return { items: items, bytes: items.reduce((s, x) => s + x.bytes, 0), files: items.reduce((s, x) => s + x.files, 0) };
+}
+
+function clearUpdaterCache() {
+  let bytes = 0, files = 0;
+  for (const p of updaterCacheDirs()) {
+    const sz = dirSize(p);
+    try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {}
+    bytes += sz.bytes;
+    files += sz.files;
+  }
+  return { bytes: bytes, files: files };
+}
+
+async function selfClean(opts) {
+  const o = opts || {};
+  const days = Math.max(1, Math.min(3650, Number(o.days) || 30));
+  const types = Array.isArray(o.types) && o.types.length ? o.types : ["tmp", "cache", "logs", "share"];
+  let agent = null;
+  try {
+    agent = await local("/api/self-clean", "POST", { types: types, days: days }, 600000);
+  } catch (e) {
+    log("self-clean agent: " + e.message);
+    agent = { error: e.message, bytes: 0, files: 0 };
+  }
+  const upd = o.updater === false ? { bytes: 0, files: 0 } : clearUpdaterCache();
+  const logs = o.logs === false ? { bytes: 0, files: 0 } : cleanLogs(days, o.logtypes && o.logtypes.length ? o.logtypes : ["agent", "backend", "desktop"]);
+  const total = Number(agent.bytes || 0) + upd.bytes + Number(logs.bytes || 0);
+  log("self-clean total: " + total + " bytes");
+  return { agent: agent, updater: upd, logs: logs, bytes: total, days: days };
+}
+
+async function selfUsage() {
+  let agent = null;
+  try { agent = await local("/api/self-usage", "GET", undefined, 60000); } catch (e) { agent = { error: e.message }; }
+  return { agent: agent, updater: updaterCacheInfo(), dataDir: DATA, logDir: path.join(DATA, "agent", "logs") };
 }
 
 const LOG_FILES = {
@@ -516,6 +840,8 @@ const calls = {
   archive: (a) => ({ route: "/api/archive", method: "POST", data: a }),
   restore: (a) => ({ route: "/api/restore", method: "POST", data: a }),
   share: (a) => ({ route: "/api/share", method: "POST", data: a }),
+  sharePack: (a) => ({ route: "/api/share-pack", method: "POST", data: a, timeout: 3600000 }),
+  selfUsage: () => ({ route: "/api/self-usage" }),
   downloads: () => ({ route: "/api/downloads" }),
   link: (a) => ({ route: "/api/link", method: "POST", data: a }),
   preview: (a) => ({ route: "/api/preview", method: "POST", data: a, timeout: 1800000 }),
@@ -696,8 +1022,9 @@ if (!gotLock) {
       app.quit();
       return;
     }
-    if (QUICK) {
-      await runQuickLink(QUICK, true);
+    if (QUICK.mode) {
+      if (QUICK.mode === "migrate") await runQuickMigrate(QUICK.paths, true);
+      else await runQuickShare(QUICK.paths, true);
       return;
     }
     try {
@@ -785,6 +1112,42 @@ ipcMain.handle("sb:set-quick-menu", (event, on) => {
   const frame = event.senderFrame && event.senderFrame.url;
   if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
   return { enabled: quickMenuSet(!!on) };
+});
+
+ipcMain.handle("sb:self-usage", (event) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  return selfUsage();
+});
+
+ipcMain.handle("sb:self-clean", (event, opts) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  return selfClean(opts || {});
+});
+
+ipcMain.handle("sb:migrate-info", (event) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  const drives = driveList().map((d) => ({ root: d.root, letter: d.letter, free: d.free, system: d.system }));
+  const cands = drives.filter((d) => !d.system).sort((a, b) => b.free - a.free);
+  return { drives: drives, recommend: cands[0] ? cands[0].root : "" };
+});
+
+ipcMain.handle("sb:migrate", (event, paths, opts) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  return migratePaths(paths, opts || {});
+});
+
+ipcMain.handle("sb:choose-any", async (event) => {
+  const frame = event.senderFrame && event.senderFrame.url;
+  if (!frame || !frame.startsWith("file://")) throw new Error("拒绝非法调用");
+  const r = await dialog.showOpenDialog(win, {
+    title: "选择要迁移或分享的文件或文件夹",
+    properties: ["openFile", "openDirectory", "multiSelections"],
+  });
+  return r.canceled ? [] : r.filePaths;
 });
 
 ipcMain.handle("sb:copy", (e, text) => {

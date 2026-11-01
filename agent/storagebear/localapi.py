@@ -278,6 +278,24 @@ def _handler(agent, token):
                 return 200, {"job_id": a.share(data.get("path", ""), data.get("provider_id", ""))}
             if method == "POST" and path == "/api/quick-link":
                 return 200, a.quicklink(data.get("path") or "", data.get("provider_id") or "")
+            if method == "POST" and path == "/api/quick-share":
+                # 资源管理器右键菜单是独立进程，等结果一次性返回
+                paths = data.get("paths")
+                if not paths and data.get("path"):
+                    paths = [data.get("path")]
+                return 200, a.sharepack(paths or [], data.get("provider_id") or "")
+            if method == "POST" and path == "/api/share-pack":
+                paths = data.get("paths")
+                if not paths and data.get("path"):
+                    paths = [data.get("path")]
+                return 200, {"job_id": a.sharepack_job(paths or [], data.get("provider_id") or "")}
+            if method == "GET" and path == "/api/self-usage":
+                return 200, a.selfusage()
+            if method == "POST" and path == "/api/self-clean":
+                types = data.get("types")
+                if isinstance(types, str):
+                    types = [x for x in types.split(",") if x]
+                return 200, a.selfclean(types, int(data.get("days") or 7))
             if method == "GET" and path == "/api/downloads":
                 return 200, a.downloads()
             if method == "POST" and path == "/api/link":
